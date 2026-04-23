@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agenda IA</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+
+<script type="module">
+  // ── GROQ ──────────────────────────────────────────────
+  const GROQ_API_KEY = "REDACTED_API_KEY";
+  const GROQ_MODEL   = "llama-3.3-70b-versatile"; // atualizado recomendado
+
+  // ── FIREBASE (CDN imports + config) ─────────────────────
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+  import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+  import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyC0SYMMsDrdKrT7y2Dqat47ShFvaamPZE0",
+    authDomain: "agenda-ef20f.firebaseapp.com",
+    projectId: "agenda-ef20f",
+    storageBucket: "agenda-ef20f.firebasestorage.app",
+    messagingSenderId: "17722931289",
+    appId: "1:17722931289:web:073817c41f8f670b181948",
+    measurementId: "G-CV2BKY24KN"
+  };
+  const app = initializeApp(firebaseConfig);
+  const db  = getFirestore(app);
+  const storage = getStorage(app);
+  // sign in anonymously so Firebase Storage rules that require auth will allow uploads
+  try{
+    const auth = getAuth(app);
+    signInAnonymously(auth).then(()=>{
+      console.log('Signed in anonymously to Firebase');
+    }).catch((e)=>{ console.warn('Anonymous auth failed', e); });
+    window.auth = auth;
+    // show current auth state in UI for easier debugging
+    try{
+      onAuthStateChanged(auth, (user)=>{
+        const el = document.getElementById('firebase-debug');
+        if(el){
+          if(user) el.textContent = `Firebase auth: uid=${user.uid} (anonymous=${user.isAnonymous})`;
+          else el.textContent = 'Firebase auth: not signed in';
+        }
+        console.debug('onAuthStateChanged', user);
+      });
+    }catch(e){ console.warn('onAuthStateChanged failed', e); }
+  }catch(e){ console.warn('auth init failed', e); }
+  // expose to non-module scripts
+  window.GROQ_API_KEY = GROQ_API_KEY;
+  window.GROQ_MODEL = GROQ_MODEL;
+  window.db = db;
+  window.storage = storage;
+  window.firebaseApp = app;
+</script>
+
+</head>
+<body>
+
+<!-- banner de configuração -->
+<div id="setup-banner">
+  <span>⚠</span>
+  <span style="display:flex;gap:8px;align-items:center;">
+    <div>
+      <strong>Configuração:</strong>
+      <div style="font-size:12px;color:#ffd27a">Cole sua chave Groq em <code>GROQ_API_KEY</code> no topo do arquivo.</div>
+      <div style="margin-top:6px;font-size:12px">Modelo Groq ativo:
+        <input id="groq-model-input" placeholder="modelo (ex: llama-3.3-70b-versatile)" style="margin-left:8px;padding:4px 6px;border-radius:6px;border:1px solid #5a5a60;background:#0f1113;color:#e8e9ec">
+        <button class="cal-nav" onclick="setGroqModelFromInput()" style="margin-left:6px">Salvar</button>
+      </div>
+    </div>
+    <div style="font-size:12px;color:#ffd27a">Crie uma chave em <a href="https://console.groq.com" target="_blank">console.groq.com</a>. Para salvar na nuvem, configure o Firebase.</div>
+  </span>
+</div>
+
+<!-- Firebase debug (auth / bucket) -->
+<div id="firebase-debug" style="position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.6);color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;z-index:9999">Firebase auth: inicializando…</div>
+
+<!-- SPLASH (aparece ao entrar) -->
+<div id="splash" class="splash-overlay">
+  <div class="splash-card">
+    <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
+    <div class="splash-header">
+      <div class="logo">💬</div>
+      <h2>Bem-vindo Moreno</h2>
+    </div>
+    <div class="splash-body">
+      <div class="splash-msg">O que temos pra hoje?</div>
+      <textarea id="splash-inp" placeholder="Ex: prova de ciberfísico sexta às 17h30..."></textarea>
+      <div id="splash-tasks" class="splash-tasks"></div>
+      <div id="splash-replies" class="splash-replies"></div>
+    </div>
+    <div class="splash-actions">
+      <button class="cal-nav" id="splash-send-btn">Enviar</button>
+    </div>
+  </div>
+</div>
+
+<div class="app">
+
+  <!-- CHAT (moved to bottom bar) -->
+  <div class="chat-col hidden" id="chat-col">
+    <div class="chat-header">
+      <div class="logo">📋</div>
+      <h1>Agenda IA</h1>
+      <span id="model-label">groq / llama-3.3-70b-versatile</span>
+    </div>
+
+    <div class="msgs" id="msgs"></div>
+
+    <div class="input-wrap">
+      <div style="flex:1;display:flex;flex-direction:column;gap:6px;">
+        <textarea id="inp" placeholder="Ex: estudar ciberfísico sexta 17:30" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <div class="input-hint">Exemplo: "prova de ciberfísico sexta às 17h30" • Enviar: <kbd>Enter</kbd> / <kbd>Ctrl</kbd>+<kbd>Enter</kbd></div>
+      </div>
+      <button class="send" id="send-btn" onclick="sendMsg()">
+        <svg viewBox="0 0 24 24"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- RIGHT PANEL -->
+  <div class="right-col">
+
+    <!-- toolbar -->
+    <div style="display:flex;gap:8px;align-items:center;padding:6px 0 12px;">
+      <button class="cal-nav" onclick="exportPDF()">Exportar PDF</button>
+    </div>
+
+    <div>
+      <div class="cal-header">
+        <button class="cal-nav" onclick="changeMonth(-1)">‹</button>
+        <span id="cal-label"></span>
+        <button class="cal-nav" onclick="changeMonth(1)">›</button>
+      </div>
+      <div class="cal-grid" id="cal-grid"></div>
+    </div>
+
+    <div>
+      <div class="section-title">resumo</div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">tarefas</div>
+          <div class="stat-val" id="stat-total">0</div>
+          <div class="stat-sub">cadastradas</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">tempo total</div>
+          <div class="stat-val" id="stat-time">—</div>
+          <div class="stat-sub">estimado</div>
+        </div>
+      </div>
+    </div>
+
+    
+
+    <div>
+      <div class="section-title">próximas tarefas</div>
+      <div id="task-list" style="display:flex;flex-direction:column;gap:7px;">
+        <div class="no-tasks">Nenhuma tarefa ainda</div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <div class="section-title">anexos</div>
+      <div id="attachments-panel" style="display:flex;flex-direction:column;gap:8px;">
+        <div id="attachments-list" style="display:flex;flex-direction:column;gap:6px;">
+          <div class="no-tasks">Nenhum anexo ainda</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button id="reconcile-attachments-btn" class="cal-nav small">Salvar anexos</button>
+          <div id="reconcile-status" style="color:var(--muted);font-size:12px;align-self:center"></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- bottom floating IA input bar -->
+<div id="bottom-ia-bar" class="bottom-ia">
+    <div class="bottom-inner">
+    <div class="bottom-center">
+      <div class="bottom-input-wrap">
+        <textarea id="inp-bottom" placeholder="Ex: estudar ciberfísico sexta 17:30" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button id="input-attach-btn" class="input-attach" aria-label="Anexar arquivo">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2.5 2.5 0 0 1-3.54-3.54l7.07-7.07" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+      <div id="bottom-replies" class="bottom-replies hidden"></div>
+    </div>
+    <button class="bottom-send" id="send-btn-bottom" onclick="sendMsg()">
+      <svg viewBox="0 0 24 24" width="18" height="18"><path fill="white" d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
+    </button>
+    <input id="import-any-file" type="file" accept="*/*" style="display:none">
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+<!-- Tesseract.js for optional client-side OCR of image attachments -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<!-- date popover -->
+<div id="date-popover" class="hidden date-popover-backdrop">
+  <div class="popover-card">
+    <div class="popover-header">
+      <h3 id="popover-title">Evento</h3>
+      <button id="popover-close" class="cal-nav">✕</button>
+    </div>
+    <div id="popover-body" class="popover-body">
+      <!-- content filled by JS -->
+    </div>
+    <div class="popover-actions" id="popover-actions">
+      <button id="popover-add-btn" class="popover-add">＋ Adicionar tarefa</button>
+    </div>
+  </div>
+</div>
+<!-- complete modal -->
+<div id="complete-modal" class="hidden">
+  <div class="modal-card">
+    <h3>Marcar tarefa como concluída</h3>
+    <div id="complete-task-label" style="color:var(--muted);font-size:13px;margin-bottom:8px">—</div>
+    <div class="modal-row">
+      <label style="font-size:13px;color:var(--muted);">Duração real (min)</label>
+      <input id="complete-minutes" type="number" min="1" placeholder="ex: 45">
+    </div>
+    <div class="modal-actions">
+      <button class="cal-nav" id="complete-cancel-btn">Cancelar</button>
+      <button class="cal-nav" id="complete-confirm-btn">Confirmar</button>
+    </div>
+  </div>
+</div>
+</body>
+</html>
