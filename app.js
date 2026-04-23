@@ -1,6 +1,46 @@
 import { collection, addDoc, getDocs, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 
+// basic calendar/runtime globals
+const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
+const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
+
+let tasks = [];
+try{ tasks = JSON.parse(localStorage.getItem('agenda_tasks')||'[]') || []; }catch(e){ tasks = []; }
+
+// migrate existing tasks: if a task is marked onlyExam and its name looks like the day-of-exam, mark onlyExamDay
+try{
+  let migrated = false;
+  for(const t of tasks){
+    if(t && t.onlyExam && !t.onlyExamDay){
+      try{
+        const n = (t.name||'').toLowerCase();
+        if(/\bdia\b|dia da prova|dia\s+da/i.test(n) || /\bdia\s+\d{1,2}\b/.test(n)){
+          t.onlyExamDay = true; migrated = true;
+        }
+      }catch(e){}
+    }
+  }
+  if(migrated) try{ localStorage.setItem('agenda_tasks', JSON.stringify(tasks)); }catch(e){}
+}catch(e){/* ignore migration errors */}
+
+let vm = (new Date()).getMonth();
+let vy = (new Date()).getFullYear();
+
+function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+
+// timer state (tracks currently active timed task)
+let activeTimer = null;
+let timerInterval = null;
+try{ activeTimer = JSON.parse(localStorage.getItem('agenda_timer')||'null'); }catch(e){ activeTimer = null; }
+
+// staged attachments waiting for user Send (not yet persisted to localStorage/Firestore)
+let pendingAttachments = [];
+
+// simple in-memory message history used by IA integrations (not window.history)
+let history = [];
+
+
 // helper to persist messages to Firestore (non-blocking)
 async function saveMessageToFirebase(role, text){
   try{
@@ -90,6 +130,17 @@ function renderAttachmentsPanel(){
 
 // render attachments panel on startup
 try{ setTimeout(()=>{ renderAttachmentsPanel(); }, 200); }catch(e){}
+// hide setup banner when GROQ key is present (avoid showing warning on configured installs)
+try{
+  setTimeout(()=>{
+    const banner = document.getElementById('setup-banner');
+    if(!banner) return;
+    const key = window.GROQ_API_KEY || window.GROQ_API_KEY === '' ? window.GROQ_API_KEY : null;
+    if(key && key !== 'COLE_SUA_CHAVE_GROQ_AQUI' && key !== 'REDACTED_API_KEY'){
+      banner.classList.add('hidden');
+    }
+  }, 300);
+}catch(e){ console.warn('hide setup banner failed', e); }
 // expose helpers for debugging from DevTools
 try{
   window.renderAttachmentsPanel = renderAttachmentsPanel;
@@ -150,33 +201,8 @@ try{
         finally{ btn.disabled = false; }
       });
     }
-    try{
-        const dateTargets = parsePortugueseDates(target);
-        if(dateTargets && dateTargets.length){
-          // find tasks matching any of the parsed dates
-          const matched = tasks.filter(t=> dateTargets.includes(t.date));
-          console.debug('delete-intercept: date removal for', dateTargets, 'matched=', matched.length);
-          if(!matched.length){
-            addMsg('ai', `Não há tarefas para ${dateTargets.join(', ')}.`);
-            inpElem.value=''; inpElem.style.height='42px';
-            const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-            if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-            return;
-          }
-          const removedNames = matched.map(m=>m.name || '—');
-          // remove them
-          // ensure the user's command isn't left in chat
-          removeUserMessage(text);
-          tasks = tasks.filter(t=> !dateTargets.includes(t.date));
-          saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          addMsg('ai', `Removidas ${removedNames.length} tarefas em ${dateTargets.join(', ')}:\n- ${removedNames.join('\n- ')}`);
-          try{ for(const r of matched){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
-          inpElem.value=''; inpElem.style.height='42px';
-          const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
-          if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
-          return;
-        }
-}
+  }, 80);
+}catch(e){ console.warn('wire manual reconcile button failed', e); }
 
 // ── calendário ───────────────────────────────────────────────────
 function changeMonth(d){ vm+=d; if(vm>11){vm=0;vy++;} if(vm<0){vm=11;vy--;} renderCal(); }
@@ -388,7 +414,12 @@ function buildExamPlan(examDateStr, attachmentUrl, text){
       cat: 'estudo',
       est: step.est
     };
-    if(step.offset === 0 && attachmentUrl) task.attachment = attachmentUrl;
+    // attach the provided attachment to all exam-related plan tasks (prep, revisão, dia da prova)
+    if(attachmentUrl) task.attachment = attachmentUrl;
+    // mark these as exam-related tasks so UI can filter or highlight
+    task.onlyExam = true;
+    // mark the actual exam day specially so we can show only the day-of-exam in the 'Prova' panel
+    if(step.offset === 0) task.onlyExamDay = true;
     plan.push(task);
   }
 
@@ -414,6 +445,15 @@ function taskAttachmentHtml(task){
     return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
   }).join('<br>');
   return `<div class="meta" style="margin-top:8px"><strong>Anexo:</strong><div>${links}</div></div>`;
+}
+
+function taskFlagsHtml(task){
+  if(!task) return '';
+  const flags = [];
+  if(task.onlyExam) flags.push('<span class="flag">Prova</span>');
+  if(task.onlyWork) flags.push('<span class="flag">Trabalho</span>');
+  if(!flags.length) return '';
+  return `<div style="margin-top:6px">${flags.join(' ')}</div>`;
 }
 
 function computeAggregates(){
@@ -565,8 +605,8 @@ function showDatePopover(dateStr){
   let html = '';
   html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${dateStr}</div>`;
   if(!items.length){ html += '<div class="no-tasks">Nenhuma tarefa nesta data</div>'; }
-  for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${t.name}</strong><div class="meta">${t.time? t.time+' · ' : ''}${t.cat} · ${t.est||''}min</div>${taskAttachmentHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
+    for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
+    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${t.name}</strong><div class="meta">${t.time? t.time+' · ' : ''}${t.cat} · ${t.est||''}min</div>${taskAttachmentHtml(t)}${taskFlagsHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
   }
   body.innerHTML = html;
   // show
@@ -641,13 +681,73 @@ function renderTasks(){
     conclBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); markTaskDone(globalIndex); });
 
     right.appendChild(startBtn); right.appendChild(conclBtn);
+    // exam / work toggles
+    const examBtn = document.createElement('button'); examBtn.className = 'cal-nav small'; examBtn.textContent = t.onlyExam ? 'Prova ✓' : 'Prova';
+    examBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyExam = !t.onlyExam; saveTasks(); renderTasks(); renderCal(); });
+    right.appendChild(examBtn);
+    const workBtn = document.createElement('button'); workBtn.className = 'cal-nav small'; workBtn.textContent = t.onlyWork ? 'Trabalho ✓' : 'Trabalho';
+    workBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyWork = !t.onlyWork; saveTasks(); renderTasks(); renderCal(); });
+    right.appendChild(workBtn);
     top.appendChild(left); top.appendChild(right);
     const meta = document.createElement('div'); meta.className='task-meta'; meta.textContent = dl + (t.time? ' · '+t.time: '') + (est? ' · '+est: '');
     card.appendChild(top); card.appendChild(meta);
+    // flags (Prova / Trabalho)
+    const flagsWrap = document.createElement('div'); flagsWrap.innerHTML = taskFlagsHtml(t);
+    card.appendChild(flagsWrap);
     // clicking the task card opens the date popover (same as clicking the day in the calendar)
     card.addEventListener('click', ()=>{ try{ showDatePopover(t.date); }catch(e){ console.warn('open date popover from task card', e); } });
     list.appendChild(card);
   });
+
+  // render exam-only tasks
+  try{
+    const examList = document.getElementById('exam-task-list');
+    if(examList){
+      const exams = tasks.filter(t=> t && t.onlyExamDay && !t.completedAt).sort((a,b)=> a.date>b.date?1:-1).slice(0,8);
+      if(!exams.length) examList.innerHTML = '<div class="no-tasks">Nenhuma tarefa de prova</div>'; else {
+        examList.innerHTML = '';
+        exams.forEach(t=>{
+          const i = tasks.indexOf(t);
+          const item = document.createElement('div'); item.className='task-card small';
+          item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
+          const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
+          const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
+          const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
+          const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
+          actions.appendChild(openBtn); actions.appendChild(createBtn);
+          item.appendChild(left); item.appendChild(actions);
+          examList.appendChild(item);
+        });
+      }
+    }
+  }catch(e){ console.warn('renderExamTasks failed', e); }
+
+  // render work-only tasks
+  try{
+    const workList = document.getElementById('work-task-list');
+    if(workList){
+      const works = tasks.filter(t=> t && t.onlyWork && !t.completedAt).sort((a,b)=> a.date>b.date?1:-1).slice(0,8);
+      if(!works.length) workList.innerHTML = '<div class="no-tasks">Nenhuma tarefa de trabalho</div>'; else {
+        workList.innerHTML = '';
+        works.forEach(t=>{
+          const i = tasks.indexOf(t);
+          const item = document.createElement('div'); item.className='task-card small';
+          item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
+          const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
+          const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
+          const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
+          const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
+          actions.appendChild(openBtn); actions.appendChild(createBtn);
+          item.appendChild(left); item.appendChild(actions);
+          workList.appendChild(item);
+        });
+      }
+    }
+  }catch(e){ console.warn('renderWorkTasks failed', e); }
 }
   // render a compact list of pending tasks inside the splash overlay
   function renderSplashTasks(){
