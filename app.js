@@ -11,6 +11,24 @@ function getUserCollection(collectionName) {
   const uid = window.auth.currentUser.uid;
   return collection(window.db, 'users', uid, collectionName);
 }
+// Network/offline notice helpers
+function showOfflineNotice(msg){
+  try{
+    let b = document.getElementById('offline-banner');
+    if(!b){
+      b = document.createElement('div');
+      b.id = 'offline-banner';
+      b.style.position = 'fixed'; b.style.left = '12px'; b.style.right = '12px'; b.style.top = '12px'; b.style.zIndex = 9999;
+      b.style.padding = '10px 14px'; b.style.borderRadius = '8px'; b.style.background = 'rgba(255,165,0,0.12)';
+      b.style.color = '#ffd17a'; b.style.fontSize = '13px'; b.style.backdropFilter = 'blur(4px)'; b.style.border = '1px solid rgba(255,165,0,0.18)';
+      document.body.appendChild(b);
+    }
+    b.textContent = msg || 'Sem conexão: alterações serão salvas localmente e sincronizadas quando online.';
+    b.style.display = 'block';
+  }catch(e){ console.warn('showOfflineNotice failed', e); }
+}
+function hideOfflineNotice(){ try{ const b = document.getElementById('offline-banner'); if(b) b.style.display = 'none'; }catch(e){}
+}
 
 // Helper function to get user-prefixed localStorage key
 function getUserLocalStorageKey(key) {
@@ -141,7 +159,17 @@ async function loadUserProfileFromFirestore(uid){
     if(!profile.name) return null;
     localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
     return profile;
-  }catch(e){ console.warn('loadUserProfileFromFirestore', e); return null; }
+  }catch(e){
+    // if offline, avoid noisy warning and show a small offline notice
+    const msg = (e && e.message) ? String(e.message).toLowerCase() : '';
+    if(msg.includes('client is offline') || msg.includes('network') || (e && e.code === 'unavailable')){
+      console.debug('loadUserProfileFromFirestore: offline, using cached profile if available');
+      showOfflineNotice('Sem conexão: carregando perfil do cache local. As alterações serão sincronizadas quando online.');
+    } else {
+      console.warn('loadUserProfileFromFirestore', e);
+    }
+    return null;
+  }
 }
 
 function getAttachmentStorageKey(uid){
@@ -258,7 +286,12 @@ async function refreshWelcomeGate(user){
     const localProfile = loadUserProfile(user.uid);
     const profile = localProfile;
     currentUserProfile = profile;
-    showSplashUI();
+    // Verifica se o splash já foi fechado para este usuário
+    const splashClosedKey = getUserLocalStorageKey('splash_closed');
+    const splashClosed = localStorage.getItem(splashClosedKey) === '1';
+    if (!splashClosed) {
+      showSplashUI();
+    }
     if(profile){
       updateSplashGreeting(profile);
       renderAccountInfo(profile);
@@ -297,7 +330,7 @@ async function refreshWelcomeGate(user){
 window.saveWelcomeProfile = function(){
   try{
     const user = window.auth && window.auth.currentUser;
-    if(!user) return;
+    if(!user) { console.warn('saveWelcomeProfile: no user'); return; }
     const name = (document.getElementById('profile-name') || {}).value || '';
     const gender = (document.getElementById('profile-gender') || {}).value || 'masc';
     const cleaned = normalizeProfile({ name, gender });
@@ -307,20 +340,32 @@ window.saveWelcomeProfile = function(){
       if(nameInput) nameInput.focus();
       return;
     }
-    saveUserProfile(user.uid, cleaned);
-    renderAccountInfo(cleaned);
+    const saved = saveUserProfile(user.uid, cleaned);
+    if(saved) console.log('Perfil salvo com sucesso:', saved);
+    else console.warn('Perfil não foi salvo (faltando nome?)', cleaned);
     hideProfileModal();
-    showSplashUI();
-    requestAnimationFrame(()=>{
-      updateSplashGreeting(cleaned);
-      const preview = document.getElementById('profile-preview');
-      if(preview) preview.textContent = buildLiveGreeting(cleaned);
-      const liveExample = document.getElementById('profile-live-example');
-      if(liveExample) liveExample.textContent = buildLiveGreeting(cleaned);
-    });
-    try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+    updateSplashGreeting(cleaned);
+    renderAccountInfo(cleaned);
+    const preview = document.getElementById('profile-preview'); if(preview) preview.textContent = buildLiveGreeting(cleaned);
+    const liveExample = document.getElementById('profile-live-example'); if(liveExample) liveExample.textContent = buildLiveGreeting(cleaned);
   }catch(e){ console.warn('saveWelcomeProfile', e); }
 };
+
+// Handler para fechar o splash e salvar no localStorage (wired on DOMContentLoaded)
+document.addEventListener('DOMContentLoaded', function() {
+  try{
+    const splashCloseBtn = document.getElementById('splash-empty-btn');
+    if (splashCloseBtn) {
+      splashCloseBtn.addEventListener('click', function() {
+        const user = window.auth && window.auth.currentUser;
+        const key = user ? getUserLocalStorageKey('splash_closed') : 'splash_closed';
+        try{ localStorage.setItem(key, '1'); }catch(e){}
+        const splash = document.getElementById('splash');
+        if (splash) splash.style.display = 'none';
+      });
+    }
+  }catch(e){ console.warn('splash close wiring failed', e); }
+});
 
 window.openAccountPanel = openAccountPanel;
 
@@ -565,6 +610,9 @@ function saveTasks(){
   try{
     const key = getUserLocalStorageKey('agenda_tasks');
     localStorage.setItem(key, JSON.stringify(tasks));
+    // also write a global fallback so a refresh before auth still shows the most recent tasks
+    try{ localStorage.setItem('agenda_tasks', JSON.stringify(tasks)); }catch(e){}
+    console.debug('saveTasks: persisted to localStorage keys', key, 'and agenda_tasks; tasks.length=', tasks.length);
   }catch(e){ console.warn('saveTasks localStorage write failed', e); }
   if(window.db){
     saveToFirebase(tasks).catch(e=>console.error('saveTasks->saveToFirebase', e));
@@ -580,6 +628,7 @@ async function loadTasksForUser(uid){
     // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
+    console.debug('loadTasksForUser: attempting to load tasks for uid=', uid, 'localKey=', key);
     if(window.db && uid){
       try{
         const col = getUserCollection('tasks');
@@ -600,6 +649,8 @@ async function loadTasksForUser(uid){
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
       return;
     }
+    // try global fallback if user-scoped key not present
+    try{ const global = JSON.parse(localStorage.getItem('agenda_tasks') || 'null'); if(Array.isArray(global)){ tasks = global; console.debug('loadTasksForUser: loaded from global agenda_tasks fallback; length=', tasks.length); computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}; return; } }catch(e){}
   }catch(e){ console.warn('loadTasksForUser', e); }
   // no data -> keep the list empty for this account and render
   tasks = [];
@@ -637,7 +688,10 @@ async function loadAttachmentsForUser(uid){
 // Called from auth state changes to load appropriate tasks
 window.handleAuthStateChange = async function(user){
   try{
+    // cancel any pending clear timer when auth state changes
+    try{ if(window._clearTasksTimer){ clearTimeout(window._clearTasksTimer); window._clearTasksTimer = null; } }catch(e){}
     if(user){
+      console.debug('handleAuthStateChange: user signed in', user && user.uid);
       await Promise.all([loadTasksForUser(user.uid), loadAttachmentsForUser(user.uid)]);
       const state = await loadUserStateFromFirestore(user.uid);
       if(state && state.activeTimer){
@@ -650,15 +704,23 @@ window.handleAuthStateChange = async function(user){
       }
       await refreshWelcomeGate(user);
     } else {
-      // not authenticated: clear in-memory tasks so the next account can't inherit them
-      tasks = [];
-      currentUserProfile = null;
-      activeTimer = null;
-      attachmentRecords = [];
-      hideProfileModal();
-      const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
-      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      try{ renderAttachmentsPanel(); }catch(e){}
+      console.debug('handleAuthStateChange: user signed out (or null). scheduling clear in 2s to avoid transient auth blips)');
+      // delay clear to avoid clearing on transient auth null (token refreshes)
+      try{
+        window._clearTasksTimer = setTimeout(()=>{
+          try{
+            tasks = [];
+            currentUserProfile = null;
+            activeTimer = null;
+            attachmentRecords = [];
+            hideProfileModal();
+            const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
+            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+            try{ renderAttachmentsPanel(); }catch(e){}
+            console.debug('handleAuthStateChange: cleared local state after logout');
+          }catch(e){ console.warn('delayed clear failed', e); }
+        }, 2000);
+      }catch(e){ console.warn('scheduling delayed clear failed', e); }
     }
   }catch(e){ console.warn('handleAuthStateChange', e); }
 }
@@ -2171,9 +2233,16 @@ window.triggerImportAny = triggerImportAny;
 async function saveToFirebase(tasksList){
   try{
     if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase save');
+      console.warn('saveToFirebase: Not authenticated, skipping Firebase save');
       return;
     }
+    // Avoid overwriting cloud data with an empty list accidentally
+    if(!Array.isArray(tasksList) || tasksList.length === 0){
+      console.warn('saveToFirebase: tasksList is empty — skipping cloud overwrite to avoid accidental data loss');
+      return;
+    }
+    const uid = window.auth.currentUser.uid;
+    console.debug('saveToFirebase: saving', tasksList.length, 'tasks for uid=', uid);
     const col = getUserCollection('tasks');
     if (!col) return;
     const existing = await getDocs(col);
@@ -2195,7 +2264,16 @@ async function saveToFirebase(tasksList){
       }
     }
     await batch.commit();
-  }catch(e){ console.error('saveToFirebase', e); }
+    console.debug('saveToFirebase: commit complete for uid=', uid);
+  }catch(e){
+    const msg = (e && e.message) ? String(e.message).toLowerCase() : '';
+    if(msg.includes('client is offline') || msg.includes('network') || (e && e.code === 'unavailable')){
+      console.debug('saveToFirebase: offline, will retry later; changes saved locally');
+      showOfflineNotice('Sem conexão: alterações foram salvas localmente e serão sincronizadas quando online.');
+    } else {
+      console.error('saveToFirebase', e);
+    }
+  }
 }
 
 // save an arbitrary event (non-blocking)
@@ -2317,18 +2395,29 @@ setTimeout(()=>{
 async function loadFromFirebase(){
   try{
     if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase load');
+      console.warn('loadFromFirebase: Not authenticated, skipping Firebase load');
       return;
     }
+    const uid = window.auth.currentUser.uid;
+    console.debug('loadFromFirebase: loading tasks for uid=', uid);
     const col   = getUserCollection('tasks');
     if (!col) return;
     const snap  = await getDocs(col);
     // preserve Firestore id in _id so we can sync edits/deletes later
     tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
+    console.debug('loadFromFirebase: loaded', tasks.length, 'tasks for uid=', uid);
     renderCal();
     renderTasks();
     try{ renderSplashTasks(); }catch(e){}
-  }catch(e){ console.error('loadFromFirebase', e); }
+  }catch(e){
+    const msg = (e && e.message) ? String(e.message).toLowerCase() : '';
+    if(msg.includes('client is offline') || msg.includes('network') || (e && e.code === 'unavailable')){
+      console.debug('loadFromFirebase: offline, skipping cloud load and using local cache');
+      showOfflineNotice('Sem conexão: carregando tarefas do cache local. As alterações serão sincronizadas quando online.');
+    } else {
+      console.error('loadFromFirebase', e);
+    }
+  }
 }
 // If Firebase is configured, load tasks automatically from Firestore on init
 if(window.db){
