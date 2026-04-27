@@ -33,6 +33,12 @@ Se você preferir rodar a CLI sem o script, use:
 npx firebase-tools deploy --only hosting
 ```
 
+Deploy automático no GitHub
+
+1. Adicione o secret `FIREBASE_TOKEN` em GitHub > Settings > Secrets and variables > Actions.
+2. Gere esse token na sua máquina com `npx firebase-tools login:ci` e cole o valor no secret.
+3. Depois disso, todo push na branch `main` vai disparar o deploy automático via GitHub Actions.
+
 O que tem neste repositório
 
 - `index.html` — entrada da aplicação (contém `firebaseConfig` e pontos do UI como splash, calendário e painel direito).
