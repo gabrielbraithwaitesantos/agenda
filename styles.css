@@ -79,6 +79,17 @@ body {
 .app.single-column .right-col { max-width: none; width: 100%; padding-left: 18px; padding-right: 18px; }
 .app.single-column .cal-grid { margin: 0 auto; }
 
+.app > .chat-col,
+.app > .right-col,
+.chat-col,
+.right-col,
+.modal-card,
+.profile-card,
+.popover-card,
+.splash-card {
+  min-width: 0;
+}
+
 /* swap order so calendar (right-col) appears first (left) and chat on the right */
 .app > .chat-col { order: 2; }
 .app > .right-col { order: 1; }
@@ -284,9 +295,344 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 /* ── responsive ── */
+@media (max-width: 1024px) {
+  body {
+    padding: 20px 10px 92px;
+  }
+
+  .app {
+    max-width: 100%;
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .app > .chat-col {
+    order: 2;
+  }
+
+  .app > .right-col {
+    order: 1;
+    width: 100%;
+  }
+
+  .right-col {
+    overflow: visible;
+  }
+
+  .cal-day {
+    min-height: 78px;
+  }
+
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 820px) {
+  body {
+    padding: 14px 8px 84px;
+  }
+
+  #setup-banner {
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+
+  .app,
+  .app.single-column {
+    width: 100%;
+  }
+
+  .chat-col,
+  .right-col {
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .msgs {
+    padding: 14px 10px;
+  }
+
+  .input-wrap {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .input-wrap textarea {
+    width: 100%;
+  }
+
+  .send {
+    margin-left: auto;
+  }
+
+  .cal-grid {
+    gap: 2px;
+  }
+
+  .cal-day {
+    min-height: 72px;
+    padding: 6px 5px;
+  }
+
+  .task-card,
+  .stat-card {
+    padding: 10px;
+  }
+
+  .splash-card,
+  .profile-card,
+  .modal-card,
+  .popover-card {
+    width: min(100%, 94vw);
+  }
+
+  .profile-card,
+  .modal-card,
+  .popover-card,
+  .splash-card {
+    padding: 14px;
+  }
+
+  .modal-actions,
+  .splash-actions,
+  .popover-actions {
+    flex-wrap: wrap;
+  }
+
+  .modal-actions .cal-nav,
+  .splash-actions .cal-nav,
+  .popover-actions .cal-nav {
+    flex: 1 1 auto;
+  }
+
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bottom-inner {
+    padding: 4px;
+  }
+
+  .bottom-action-panel {
+    left: 0;
+    right: 0;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .bottom-replies {
+    left: 0;
+    right: 0;
+  }
+
+  #firebase-debug {
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    max-width: calc(100vw - 16px);
+    font-size: 11px;
+  }
+}
+
 @media (max-width: 600px) {
-  .app { grid-template-columns: 1fr; }
-  .right-col { display: none; }
+  body {
+    padding: 10px 8px 80px;
+  }
+
+  .app,
+  .app.single-column {
+    width: 100%;
+    gap: 12px;
+  }
+
+  .chat-col,
+  .right-col {
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .chat-header {
+    padding: 12px 8px;
+    gap: 10px;
+  }
+
+  .chat-header h1 {
+    font-size: 15px;
+  }
+
+  .chat-header span {
+    display: none;
+  }
+
+  .msgs {
+    gap: 10px;
+    padding: 12px 6px;
+  }
+
+  .msg {
+    max-width: 92%;
+  }
+
+  .bubble {
+    font-size: 13px;
+    padding: 9px 12px;
+  }
+
+  .input-wrap {
+    padding: 10px 8px;
+    gap: 8px;
+  }
+
+  .input-wrap textarea {
+    min-height: 40px;
+    font-size: 13px;
+  }
+
+  .input-hint {
+    font-size: 11px;
+    flex-wrap: wrap;
+  }
+
+  .right-col {
+    display: flex;
+    gap: 12px;
+  }
+
+  .right-col > div {
+    min-width: 0;
+  }
+
+  .cal-header {
+    gap: 8px;
+  }
+
+  .cal-header span {
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .cal-nav {
+    padding: 6px 8px;
+  }
+
+  .cal-grid {
+    gap: 1px;
+  }
+
+  .cal-dow {
+    font-size: 10px;
+    padding: 4px 0;
+  }
+
+  .cal-day {
+    min-height: 64px;
+    padding: 5px 4px;
+    border-radius: 8px;
+  }
+
+  .cal-day .day-number,
+  .cal-day .mini-text,
+  .cal-day .more-count {
+    font-size: 10px;
+  }
+
+  .task-card,
+  .stat-card,
+  .agg-item {
+    padding: 9px;
+  }
+
+  .task-name {
+    font-size: 12px;
+  }
+
+  .stat-val {
+    font-size: 18px;
+  }
+
+  .splash-card,
+  .profile-card,
+  .modal-card,
+  .popover-card {
+    width: calc(100vw - 16px);
+    max-width: calc(100vw - 16px);
+    padding: 12px;
+    border-radius: 12px;
+  }
+
+  .splash-header h2 {
+    font-size: 16px;
+  }
+
+  .splash-header .logo {
+    width: 40px;
+    height: 40px;
+    font-size: 16px;
+  }
+
+  .splash-actions,
+  .modal-actions,
+  .popover-actions {
+    gap: 8px;
+  }
+
+  .splash-actions .cal-nav,
+  .modal-actions .cal-nav,
+  .popover-actions .cal-nav {
+    width: 100%;
+  }
+
+  .bottom-ia {
+    width: calc(100% - 12px);
+    bottom: 8px;
+  }
+
+  .bottom-inner {
+    gap: 8px;
+  }
+
+  .bottom-input-wrap {
+    border-radius: 16px;
+    padding: 5px 8px;
+  }
+
+  .bottom-input-wrap textarea {
+    padding-right: 42px;
+    font-size: 13px;
+  }
+
+  .bottom-input-wrap .input-attach {
+    right: 8px;
+    width: 28px;
+    height: 28px;
+  }
+
+  .bottom-send {
+    width: 40px;
+    height: 34px;
+    border-radius: 9px;
+  }
+
+  .bottom-replies {
+    max-height: 180px;
+  }
+
+  .attachment-preview {
+    gap: 8px;
+  }
+
+  .attachment-thumbwrap,
+  .attachment-thumb,
+  .attachment-icon {
+    width: 48px;
+    height: 48px;
+  }
+
+  #firebase-debug {
+    font-size: 10px;
+    padding: 5px 6px;
+  }
 }
 
 /* bottom floating IA bar */
