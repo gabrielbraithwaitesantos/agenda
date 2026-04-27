@@ -411,28 +411,22 @@ body {
   }
 
   .bottom-inner {
-    padding: 4px;
+    padding: 4px !important;
+    max-width: none;
   }
 
   .bottom-action-panel {
-    left: 0;
-    right: 0;
-    width: 100%;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
     flex-wrap: wrap;
   }
 
   .bottom-replies {
-    left: 0;
-    right: 0;
+    left: 0 !important;
+    right: 0 !important;
   }
 
-  #firebase-debug {
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    max-width: calc(100vw - 16px);
-    font-size: 11px;
-  }
 }
 
 @media (max-width: 600px) {
@@ -584,17 +578,22 @@ body {
   }
 
   .bottom-ia {
-    width: calc(100% - 12px);
-    bottom: 8px;
+    left: 6px !important;
+    right: 6px !important;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 8px) !important;
+    width: auto !important;
+    transform: none !important;
   }
 
   .bottom-inner {
-    gap: 8px;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
   }
 
   .bottom-input-wrap {
     border-radius: 16px;
     padding: 5px 8px;
+    width: 100%;
   }
 
   .bottom-input-wrap textarea {
@@ -614,6 +613,10 @@ body {
     border-radius: 9px;
   }
 
+  .bottom-center {
+    width: 100%;
+  }
+
   .bottom-replies {
     max-height: 180px;
   }
@@ -629,10 +632,6 @@ body {
     height: 48px;
   }
 
-  #firebase-debug {
-    font-size: 10px;
-    padding: 5px 6px;
-  }
 }
 
 /* bottom floating IA bar */

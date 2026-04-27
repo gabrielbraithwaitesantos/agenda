@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -49,10 +49,12 @@ function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d
 // timer state (tracks currently active timed task)
 let activeTimer = null;
 let timerInterval = null;
-try{ activeTimer = JSON.parse(localStorage.getItem('agenda_timer')||'null'); }catch(e){ activeTimer = null; }
+activeTimer = null;
 
 // staged attachments waiting for user Send (not yet persisted to localStorage/Firestore)
 let pendingAttachments = [];
+
+let attachmentRecords = [];
 
 // simple in-memory message history used by IA integrations (not window.history)
 let history = [];
@@ -129,13 +131,61 @@ function loadUserProfile(uid){
   }catch(e){ console.warn('loadUserProfile', e); return null; }
 }
 
-function saveUserProfile(uid, profile){
+async function loadUserProfileFromFirestore(uid){
+  try{
+    if(!window.db || !uid) return null;
+    const snap = await getDoc(doc(window.db, 'users', uid));
+    if(!snap.exists()) return null;
+    const data = snap.data() || {};
+    const profile = normalizeProfile(data.profile || {});
+    if(!profile.name) return null;
+    localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
+    return profile;
+  }catch(e){ console.warn('loadUserProfileFromFirestore', e); return null; }
+}
+
+function getAttachmentStorageKey(uid){
+  if(!uid) return 'agenda_attachments';
+  return `${uid}_agenda_attachments`;
+}
+
+function getUserStateKey(uid){
+  if(!uid) return 'agenda_state';
+  return `${uid}_agenda_state`;
+}
+
+async function saveUserProfile(uid, profile){
   const cleaned = normalizeProfile(profile || {});
   if(!cleaned.name) return null;
   localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
   currentUserProfile = cleaned;
   updateSplashGreeting(cleaned);
+  try{
+    if(window.db){
+      await setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true });
+    }
+  }catch(e){ console.warn('saveUserProfile firestore write failed', e); }
   return cleaned;
+}
+
+async function saveUserState(uid, state){
+  try{
+    if(!window.db || !uid) return;
+    await setDoc(doc(window.db, 'users', uid), { state, stateUpdatedAt: Date.now() }, { merge: true });
+    try{ localStorage.setItem(getUserStateKey(uid), JSON.stringify(state || {})); }catch(e){}
+  }catch(e){ console.warn('saveUserState', e); }
+}
+
+async function loadUserStateFromFirestore(uid){
+  try{
+    if(!window.db || !uid) return null;
+    const snap = await getDoc(doc(window.db, 'users', uid));
+    if(!snap.exists()) return null;
+    const data = snap.data() || {};
+    const state = data.state || {};
+    try{ localStorage.setItem(getUserStateKey(uid), JSON.stringify(state || {})); }catch(e){}
+    return state;
+  }catch(e){ console.warn('loadUserStateFromFirestore', e); return null; }
 }
 
 function renderAccountInfo(profile){
@@ -196,7 +246,7 @@ function showProfileError(msg){
   if(message) message.textContent = msg;
 }
 
-function refreshWelcomeGate(user){
+async function refreshWelcomeGate(user){
   try{
     if(!user){
       currentUserProfile = null;
@@ -205,7 +255,7 @@ function refreshWelcomeGate(user){
       return;
     }
     showSplashUI();
-    const profile = loadUserProfile(user.uid);
+    const profile = await loadUserProfileFromFirestore(user.uid);
     currentUserProfile = profile;
     if(profile){
       updateSplashGreeting(profile);
@@ -244,12 +294,13 @@ window.saveWelcomeProfile = function(){
       if(nameInput) nameInput.focus();
       return;
     }
-    saveUserProfile(user.uid, cleaned);
-    renderAccountInfo(cleaned);
-    hideProfileModal();
-    showSplashUI();
-    updateSplashGreeting(cleaned);
-    try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+    Promise.resolve(saveUserProfile(user.uid, cleaned)).then(()=>{
+      renderAccountInfo(cleaned);
+      hideProfileModal();
+      showSplashUI();
+      updateSplashGreeting(cleaned);
+      try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+    });
   }catch(e){ console.warn('saveWelcomeProfile', e); }
 };
 
@@ -283,15 +334,25 @@ async function saveAttachmentRecord(name, url, size, mime, ocr){
     if(!window.db) return;
     const col = getUserCollection('attachments');
     if (!col) return;
-    await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
+    const docRef = await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
+    return docRef.id;
   }catch(e){ console.warn('saveAttachmentRecord', e); }
 }
 
 // local attachments storage (persist metadata in localStorage for quick access)
 function loadLocalAttachments(){
-  try{ return JSON.parse(localStorage.getItem('agenda_attachments')||'[]'); }catch(e){ return []; }
+  try{
+    if(Array.isArray(attachmentRecords) && attachmentRecords.length) return attachmentRecords;
+    if(!window.auth || !window.auth.currentUser) return [];
+    const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+    return JSON.parse(localStorage.getItem(getAttachmentStorageKey(uid))||'[]');
+  }catch(e){ return []; }
 }
-function saveLocalAttachments(list){ localStorage.setItem('agenda_attachments', JSON.stringify(list||[])); }
+function saveLocalAttachments(list){
+  attachmentRecords = Array.isArray(list) ? list : [];
+  const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+  localStorage.setItem(getAttachmentStorageKey(uid), JSON.stringify(attachmentRecords));
+}
 
 function registerAttachmentLocalRecord(name, url, size, mime, ocr){
   try{
@@ -305,8 +366,16 @@ function registerAttachmentLocalRecord(name, url, size, mime, ocr){
   }catch(e){ console.warn('registerAttachmentLocalRecord', e); }
 }
 
-function removeLocalAttachment(id){
-  try{ const list = loadLocalAttachments().filter(a=>a.id!==id); saveLocalAttachments(list); renderAttachmentsPanel(); }catch(e){ console.warn('removeLocalAttachment', e); }
+async function removeLocalAttachment(id){
+  try{
+    const user = window.auth && window.auth.currentUser;
+    if(window.db && user && id && !String(id).startsWith('a_')){
+      try{ await deleteDoc(doc(window.db, 'users', user.uid, 'attachments', id)); }catch(e){ console.warn('removeLocalAttachment firestore delete failed', e); }
+    }
+    const list = loadLocalAttachments().filter(a=>a.id!==id);
+    saveLocalAttachments(list);
+    renderAttachmentsPanel();
+  }catch(e){ console.warn('removeLocalAttachment', e); }
 }
 
 function createTaskFromAttachment(id){
@@ -487,12 +556,25 @@ function saveTasks(){
   try{ renderSplashTasks(); }catch(e){}
 }
 
-// Load tasks for a given user (localStorage first, then Firestore fallback)
+// Load tasks for a given user (Firestore first, then local cache fallback)
 async function loadTasksForUser(uid){
   try{
     // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
+    if(window.db && uid){
+      try{
+        const col = getUserCollection('tasks');
+        if(col){
+          const snap = await getDocs(col);
+          const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          tasks = Array.isArray(arr) ? arr : [];
+          try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+          computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+          return;
+        }
+      }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
+    }
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
     if(Array.isArray(local)){
@@ -500,41 +582,65 @@ async function loadTasksForUser(uid){
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
       return;
     }
-    // fallback to Firestore if available and user present
-    if(window.db && uid){
-      try{
-        const col = getUserCollection('tasks');
-        if(col){
-          const snap = await getDocs(col);
-          const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-          if(arr && arr.length){
-            tasks = arr;
-            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-            return;
-          }
-        }
-      }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
-    }
   }catch(e){ console.warn('loadTasksForUser', e); }
   // no data -> keep the list empty for this account and render
   tasks = [];
   computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
 }
 
+async function loadAttachmentsForUser(uid){
+  try{
+    attachmentRecords = [];
+    const key = getAttachmentStorageKey(uid);
+    if(window.db && uid){
+      try{
+        const col = getUserCollection('attachments');
+        if(col){
+          const snap = await getDocs(col);
+          const arr = snap.docs.map(d=>{
+            const data = d.data() || {};
+            return { id: d.id, name: data.name || 'anexo', url: data.url || '', size: Number(data.size || 0), mime: data.mime || null, ocr: data.ocr || null, ts: data.ts || new Date().toISOString() };
+          });
+          attachmentRecords = Array.isArray(arr) ? arr : [];
+          try{ localStorage.setItem(key, JSON.stringify(attachmentRecords)); }catch(e){}
+          renderAttachmentsPanel();
+          return attachmentRecords;
+        }
+      }catch(e){ console.warn('loadAttachmentsForUser firestore read failed', e); }
+    }
+    let local = [];
+    try{ local = JSON.parse(localStorage.getItem(key) || '[]'); }catch(e){ local = []; }
+    if(Array.isArray(local)) attachmentRecords = local;
+    renderAttachmentsPanel();
+    return attachmentRecords;
+  }catch(e){ console.warn('loadAttachmentsForUser', e); attachmentRecords = []; renderAttachmentsPanel(); return []; }
+}
+
 // Called from auth state changes to load appropriate tasks
 window.handleAuthStateChange = async function(user){
   try{
     if(user){
-      await loadTasksForUser(user.uid);
-      refreshWelcomeGate(user);
+      await Promise.all([loadTasksForUser(user.uid), loadAttachmentsForUser(user.uid)]);
+      const state = await loadUserStateFromFirestore(user.uid);
+      if(state && state.activeTimer){
+        activeTimer = state.activeTimer;
+        try{ localStorage.setItem(getUserLocalStorageKey('agenda_timer'), JSON.stringify(activeTimer)); }catch(e){}
+        startTimerInterval();
+      } else {
+        activeTimer = null;
+        try{ localStorage.removeItem(getUserLocalStorageKey('agenda_timer')); }catch(e){}
+      }
+      await refreshWelcomeGate(user);
     } else {
       // not authenticated: clear in-memory tasks so the next account can't inherit them
       tasks = [];
       currentUserProfile = null;
+      activeTimer = null;
+      attachmentRecords = [];
       hideProfileModal();
       const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      try{ renderAttachmentsPanel(); }catch(e){}
     }
   }catch(e){ console.warn('handleAuthStateChange', e); }
 }
@@ -755,7 +861,14 @@ function computeAggregates(){
   const nameAgg = {};
   for(const k of Object.keys(nameStats)) nameAgg[k] = { avg: Math.round((nameStats[k].sum/nameStats[k].count)||0), n: nameStats[k].count, sample: nameStats[k].sample };
   const agg = { byCategory: catAgg, byName: nameAgg, computedAt: new Date().toISOString() };
-  localStorage.setItem('agenda_aggregates', JSON.stringify(agg));
+  try{
+    const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+    if(uid) localStorage.setItem(getUserLocalStorageKey('agenda_aggregates'), JSON.stringify(agg));
+  }catch(e){}
+  try{
+    const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+    if(uid) setDoc(doc(window.db, 'users', uid), { aggregates: agg, aggregatesUpdatedAt: Date.now() }, { merge: true }).catch(e=>console.warn('computeAggregates cloud save failed', e));
+  }catch(e){}
   renderAggregatesUI(agg);
   return agg;
 }
@@ -779,8 +892,12 @@ function renderAggregatesUI(agg){
   container.innerHTML = html;
 }
 
-// try load existing aggregates on init
-try{ const ex = JSON.parse(localStorage.getItem('agenda_aggregates')||'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
+// try load existing aggregates on init from the current user's cache if available
+try{
+  const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+  const ex = uid ? JSON.parse(localStorage.getItem(getUserLocalStorageKey('agenda_aggregates'))||'null') : null;
+  if(ex) renderAggregatesUI(ex);
+}catch(e){}
 
 // ── CRUD manual, export/import ───────────────────────────────────
 function createTask(){
@@ -1170,7 +1287,9 @@ function renderTasks(){
     if(activeTimer && ((activeTimer.id && tasks.findIndex(t=>t && t._id===activeTimer.id)!==i) || (!activeTimer.id && activeTimer.index!==i)) ) stopTimer();
     const id = tasks[i] && tasks[i]._id ? tasks[i]._id : null;
     activeTimer = { index: i, id, start: new Date().toISOString() };
-    localStorage.setItem('agenda_timer', JSON.stringify(activeTimer));
+    const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null;
+    if(uid) localStorage.setItem(getUserLocalStorageKey('agenda_timer'), JSON.stringify(activeTimer));
+    if(uid) saveUserState(uid, { activeTimer }).catch(e=>console.warn('save activeTimer state failed', e));
     startTimerInterval();
     renderTasks(); renderCal();
   }
@@ -1184,28 +1303,21 @@ function renderTasks(){
       i = tasks.findIndex(x=>x && x._id === activeTimer.id);
       if(i !== -1) t = tasks[i];
     }
-    if(!t){ activeTimer = null; localStorage.removeItem('agenda_timer'); return; }
+    if(!t){ activeTimer = null; const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null; if(uid) localStorage.removeItem(getUserLocalStorageKey('agenda_timer')); if(uid) saveUserState(uid, { activeTimer: null }).catch(e=>console.warn('clear activeTimer state failed', e)); return; }
     const start = new Date(activeTimer.start);
     const mins = Math.max(1, Math.round((Date.now() - start.getTime())/60000));
     t.actualDuration = (Number(t.actualDuration) || 0) + mins;
     delete t.timerStart;
     saveTasks();
     try{ saveEventAndLearning('task.timed', { taskId: t._id||null, name: t.name, minutes: mins }); }catch(e){}
-    activeTimer = null; localStorage.removeItem('agenda_timer');
+    activeTimer = null; const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null; if(uid) localStorage.removeItem(getUserLocalStorageKey('agenda_timer'));
+    try{ const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : null; if(uid) saveUserState(uid, { activeTimer: null }).catch(e=>console.warn('clear activeTimer state failed', e)); }catch(e){}
     if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
     renderTasks(); renderCal();
   }
 
 // ── chat helpers ─────────────────────────────────────────────────
 function addMsg(role, text){
-  const msgs = document.getElementById('msgs');
-  if(!msgs){
-    console.warn('addMsg: msgs element not found');
-    return;
-  }
-  const wrap = document.createElement('div');
-  wrap.className = 'msg '+role;
-  const t = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   const safeText = (text === null || text === undefined) ? '' : String(text);
   wrap.innerHTML = `<div class="bubble">${safeText.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;
   msgs.appendChild(wrap);
@@ -1310,14 +1422,13 @@ async function uploadPendingAttachment(att, persist = true){
       if(att.url){
         try{
           if(persist){
-            try{ saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr).catch(e=>console.warn('saveAttachmentRecord failed', e)); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
+              let docId = null;
+              try{ docId = await saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
             try{
-              const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
-              const curRaw = localStorage.getItem('agenda_attachments');
-              let cur = [];
-              try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
+              const rec = { id: docId || 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
+              const cur = loadLocalAttachments();
               cur.unshift(rec);
-              localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+              saveLocalAttachments(cur);
               try{ renderAttachmentsPanel(); }catch(e){}
               try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
               // remove pending marker from preview since it's now persisted
@@ -1358,14 +1469,13 @@ async function uploadPendingAttachment(att, persist = true){
               try{ att.url = url; att.ocr = ocrText; }catch(e){}
               // if persist requested, save to Firestore and localStorage
               if(persist){
-                try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
+                let docId = null;
+                try{ docId = await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
                 try{
-                  const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                  const curRaw = localStorage.getItem('agenda_attachments');
-                  let cur = [];
-                  try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
+                  const rec = { id: docId || 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
+                  const cur = loadLocalAttachments();
                   cur.unshift(rec);
-                  localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                  saveLocalAttachments(cur);
                   try{ renderAttachmentsPanel(); }catch(e){}
                   try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                   // remove pending marker from preview since it's now persisted
@@ -1405,14 +1515,13 @@ async function uploadPendingAttachment(att, persist = true){
             try{ att.url = url; att.ocr = ocrText; }catch(e){}
             // if persist requested, save to Firestore and localStorage
             if(persist){
-              try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
+              let docId = null;
+              try{ docId = await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
               try{
-                const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                const curRaw = localStorage.getItem('agenda_attachments');
-                let cur = [];
-                try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
+                const rec = { id: docId || 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
+                const cur = loadLocalAttachments();
                 cur.unshift(rec);
-                localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                saveLocalAttachments(cur);
                 try{ renderAttachmentsPanel(); }catch(e){}
                 try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                 // remove pending marker from preview since it's now persisted
@@ -2362,7 +2471,7 @@ window.performLogout = async function(){
         const key = getUserLocalStorageKey('agenda_tasks');
         localStorage.setItem(key, JSON.stringify(tasks));
         // also save attachments and aggregates under user-scoped keys
-        try{ const akey = getUserLocalStorageKey('agenda_attachments'); localStorage.setItem(akey, localStorage.getItem('agenda_attachments')||'[]'); }catch(e){}
+        try{ const akey = getUserLocalStorageKey('agenda_attachments'); localStorage.setItem(akey, JSON.stringify(loadLocalAttachments() || [])); }catch(e){}
         try{ const gkey = getUserLocalStorageKey('agenda_aggregates'); localStorage.setItem(gkey, localStorage.getItem('agenda_aggregates')||'{}'); }catch(e){}
       }catch(e){ console.warn('persist before logout failed', e); }
     }
@@ -2371,8 +2480,8 @@ window.performLogout = async function(){
     tasks = [];
     history = [];
     pendingAttachments = [];
-    localStorage.removeItem('agenda_timer');
-    localStorage.removeItem('agenda_aggregates');
+    try{ if(window.auth && window.auth.currentUser) localStorage.removeItem(getUserLocalStorageKey('agenda_timer')); }catch(e){}
+    try{ if(window.auth && window.auth.currentUser) localStorage.removeItem(getUserLocalStorageKey('agenda_aggregates')); }catch(e){}
 
     // hide logout modal if open
     try{ const modal = document.getElementById('logout-modal'); if(modal) modal.classList.add('hidden'); }catch(e){}
