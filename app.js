@@ -1318,6 +1318,14 @@ function renderTasks(){
 
 // ── chat helpers ─────────────────────────────────────────────────
 function addMsg(role, text){
+  const msgs = document.getElementById('msgs');
+  if(!msgs){
+    console.warn('addMsg: msgs element not found');
+    return;
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  const t = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const safeText = (text === null || text === undefined) ? '' : String(text);
   wrap.innerHTML = `<div class="bubble">${safeText.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;
   msgs.appendChild(wrap);
@@ -1422,18 +1430,23 @@ async function uploadPendingAttachment(att, persist = true){
       if(att.url){
         try{
           if(persist){
-              let docId = null;
-              try{ docId = await saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
-            try{
-              const rec = { id: docId || 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
-              const cur = loadLocalAttachments();
-              cur.unshift(rec);
-              saveLocalAttachments(cur);
-              try{ renderAttachmentsPanel(); }catch(e){}
-              try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
-              // remove pending marker from preview since it's now persisted
-              try{ if(att.preview && att.preview.dataset) { delete att.preview.dataset.pending; att.preview.classList.remove('attachment-pending'); } }catch(e){}
-            }catch(e){ console.warn('local persist failed', e); try{ registerAttachmentLocalRecord(att.name, att.url, att.size, att.mime, att.ocr); }catch(e2){ console.warn('registerAttachmentLocalRecord failed', e2); } }
+            Promise.resolve(saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr))
+              .then((docId)=>{
+                try{
+                  const rec = { id: docId || 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
+                  const cur = loadLocalAttachments();
+                  cur.unshift(rec);
+                  saveLocalAttachments(cur);
+                  try{ renderAttachmentsPanel(); }catch(e){}
+                  try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
+                  // remove pending marker from preview since it's now persisted
+                  try{ if(att.preview && att.preview.dataset) { delete att.preview.dataset.pending; att.preview.classList.remove('attachment-pending'); } }catch(e){}
+                }catch(e){
+                  console.warn('local persist failed', e);
+                  try{ registerAttachmentLocalRecord(att.name, att.url, att.size, att.mime, att.ocr); }catch(e2){ console.warn('registerAttachmentLocalRecord failed', e2); }
+                }
+              })
+              .catch(e=>console.warn('saveAttachmentRecord failed', e));
           }
         }catch(e){ console.warn('persist existing upload failed', e); }
         resolve({ url: att.url, ocr: att.ocr, name: att.name, size: att.size, mime: att.mime });
