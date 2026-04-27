@@ -96,8 +96,8 @@
       if(setupBanner) setupBanner.style.display = 'none';
       const bottom = document.getElementById('bottom-ia-bar');
       if(bottom) bottom.style.display = 'none';
-      try{ if(window.handleAuthStateChange) window.handleAuthStateChange(null); }catch(e){}
       document.documentElement.classList.remove('auth-loading');
+      try{ if(window.handleAuthStateChange) window.handleAuthStateChange(null); }catch(e){}
       return;
     }
 
@@ -114,8 +114,8 @@
     if(bottom) bottom.style.display = 'block';
 
     // let app.js load user-specific tasks and state
-    try{ if(window.handleAuthStateChange) window.handleAuthStateChange(user); }catch(e){ console.warn('handleAuthStateChange call failed', e); }
     document.documentElement.classList.remove('auth-loading');
+    try{ if(window.handleAuthStateChange) window.handleAuthStateChange(user); }catch(e){ console.warn('handleAuthStateChange call failed', e); }
   });
   // expose to non-module scripts
   window.GROQ_API_KEY = GROQ_API_KEY;

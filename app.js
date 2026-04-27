@@ -154,7 +154,7 @@ function getUserStateKey(uid){
   return `${uid}_agenda_state`;
 }
 
-async function saveUserProfile(uid, profile){
+function saveUserProfile(uid, profile){
   const cleaned = normalizeProfile(profile || {});
   if(!cleaned.name) return null;
   localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
@@ -162,7 +162,8 @@ async function saveUserProfile(uid, profile){
   updateSplashGreeting(cleaned);
   try{
     if(window.db){
-      await setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true });
+      setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true })
+        .catch(e=>console.warn('saveUserProfile firestore write failed', e));
     }
   }catch(e){ console.warn('saveUserProfile firestore write failed', e); }
   return cleaned;
@@ -254,9 +255,10 @@ async function refreshWelcomeGate(user){
       updateSplashGreeting(null);
       return;
     }
-    showSplashUI();
-    const profile = await loadUserProfileFromFirestore(user.uid);
+    const localProfile = loadUserProfile(user.uid);
+    const profile = localProfile;
     currentUserProfile = profile;
+    showSplashUI();
     if(profile){
       updateSplashGreeting(profile);
       renderAccountInfo(profile);
@@ -278,6 +280,17 @@ async function refreshWelcomeGate(user){
       renderAccountInfo({ name:'', gender:'masc' });
       showProfileModal();
     }
+    loadUserProfileFromFirestore(user.uid).then((remoteProfile)=>{
+      const finalProfile = remoteProfile || localProfile;
+      if(!finalProfile) return;
+      currentUserProfile = finalProfile;
+      updateSplashGreeting(finalProfile);
+      renderAccountInfo(finalProfile);
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = buildLiveGreeting(finalProfile);
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = buildLiveGreeting(finalProfile);
+    }).catch(e=>console.warn('refreshWelcomeGate remote profile sync failed', e));
   }catch(e){ console.warn('refreshWelcomeGate', e); }
 }
 
@@ -294,13 +307,18 @@ window.saveWelcomeProfile = function(){
       if(nameInput) nameInput.focus();
       return;
     }
-    Promise.resolve(saveUserProfile(user.uid, cleaned)).then(()=>{
-      renderAccountInfo(cleaned);
-      hideProfileModal();
-      showSplashUI();
+    saveUserProfile(user.uid, cleaned);
+    renderAccountInfo(cleaned);
+    hideProfileModal();
+    showSplashUI();
+    requestAnimationFrame(()=>{
       updateSplashGreeting(cleaned);
-      try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = buildLiveGreeting(cleaned);
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = buildLiveGreeting(cleaned);
     });
+    try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
   }catch(e){ console.warn('saveWelcomeProfile', e); }
 };
 
