@@ -1,5 +1,22 @@
 import { collection, addDoc, getDocs, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// Helper function to get user-scoped collection path
+function getUserCollection(collectionName) {
+  if (!window.auth || !window.auth.currentUser) {
+    console.error('User not authenticated');
+    return null;
+  }
+  const uid = window.auth.currentUser.uid;
+  return collection(window.db, 'users', uid, collectionName);
+}
+
+// Helper function to get user-prefixed localStorage key
+function getUserLocalStorageKey(key) {
+  if (!window.auth || !window.auth.currentUser) return key;
+  return `${window.auth.currentUser.uid}_${key}`;
+}
 
 // basic calendar/runtime globals
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
@@ -40,12 +57,211 @@ let pendingAttachments = [];
 // simple in-memory message history used by IA integrations (not window.history)
 let history = [];
 
+// current user profile used for personalized greeting in the splash
+let currentUserProfile = null;
+
+function getProfileStorageKey(uid){
+  if(!uid) return 'agenda_profile';
+  return `${uid}_agenda_profile`;
+}
+
+function normalizeProfile(profile){
+  const rawName = String(profile && profile.name ? profile.name : '').trim();
+  const name = rawName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+  const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
+  return { name, gender };
+}
+
+function buildGreeting(profile){
+  const p = normalizeProfile(profile || {});
+  if(!p.name) return 'Bem-vindo moreno';
+  const prefix = p.gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  return `${prefix} ${p.name}`;
+}
+
+function buildLiveGreeting(profile){
+  const rawName = String(profile && profile.name ? profile.name : '').replace(/\s+/g, ' ').trim();
+  const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
+  const prefix = gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  if(!rawName) return prefix;
+  return `${prefix} ${rawName}`;
+}
+
+function updateSplashGreeting(profile, live = false){
+  const el = document.getElementById('splash-greeting');
+  const text = live ? buildLiveGreeting(profile) : buildGreeting(profile);
+  if(el) el.textContent = text;
+  const preview = document.getElementById('profile-preview');
+  if(preview && profile) preview.textContent = text;
+}
+
+function showSplashUI(){
+  const splash = document.getElementById('splash');
+  if(splash) splash.style.display = 'flex';
+  const bottom = document.getElementById('bottom-ia-bar') || document.querySelector('.bottom-ia');
+  if(bottom) bottom.classList.remove('visible');
+}
+
+function hideProfileModal(){
+  const modal = document.getElementById('profile-modal');
+  if(modal) modal.classList.add('hidden');
+}
+
+function showProfileModal(){
+  const modal = document.getElementById('profile-modal');
+  if(modal) modal.classList.remove('hidden');
+  const nameInput = document.getElementById('profile-name');
+  if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+}
+
+function loadUserProfile(uid){
+  try{
+    const raw = localStorage.getItem(getProfileStorageKey(uid));
+    if(!raw) return null;
+    const parsed = JSON.parse(raw);
+    const profile = normalizeProfile(parsed || {});
+    if(!profile.name) return null;
+    return profile;
+  }catch(e){ console.warn('loadUserProfile', e); return null; }
+}
+
+function saveUserProfile(uid, profile){
+  const cleaned = normalizeProfile(profile || {});
+  if(!cleaned.name) return null;
+  localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
+  currentUserProfile = cleaned;
+  updateSplashGreeting(cleaned);
+  return cleaned;
+}
+
+function renderAccountInfo(profile){
+  const el = document.getElementById('profile-account-info');
+  const user = window.auth && window.auth.currentUser;
+  if(!el) return;
+  if(!user){
+    el.textContent = 'Você precisa estar logado para ver os dados da conta.';
+    return;
+  }
+  const p = normalizeProfile(profile || currentUserProfile || loadUserProfile(user.uid) || {});
+  const displayName = p.name || 'Não definido';
+  const genderLabel = p.gender === 'fem' ? 'Feminino' : 'Masculino';
+  el.innerHTML = `
+    <div><strong>Email:</strong> ${user.email || 'sem email'}</div>
+    <div><strong>Nome:</strong> ${displayName}</div>
+    <div><strong>Saudação:</strong> ${genderLabel}</div>
+  `;
+}
+
+function openAccountPanel(){
+  try{
+    const user = window.auth && window.auth.currentUser;
+    if(!user) return;
+    const profile = loadUserProfile(user.uid) || currentUserProfile || { name:'', gender:'masc' };
+    currentUserProfile = normalizeProfile(profile);
+    const nameInput = document.getElementById('profile-name');
+    const genderInput = document.getElementById('profile-gender');
+    if(nameInput) nameInput.value = currentUserProfile.name || '';
+    if(genderInput) genderInput.value = currentUserProfile.gender || 'masc';
+    renderAccountInfo(currentUserProfile);
+    const preview = document.getElementById('profile-preview');
+    if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+    const liveExample = document.getElementById('profile-live-example');
+    if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    const modal = document.getElementById('profile-modal');
+    if(modal) modal.classList.remove('hidden');
+    if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+  }catch(e){ console.warn('openAccountPanel', e); }
+}
+
+function syncProfilePreview(){
+  const name = (document.getElementById('profile-name') || {}).value || '';
+  const gender = (document.getElementById('profile-gender') || {}).value || 'masc';
+  const preview = document.getElementById('profile-preview');
+  const liveExample = document.getElementById('profile-live-example');
+  const message = document.getElementById('profile-message');
+  const profile = { name, gender };
+  const liveGreeting = buildLiveGreeting(profile);
+  if(preview) preview.textContent = liveGreeting;
+  if(liveExample) liveExample.textContent = liveGreeting;
+  updateSplashGreeting(profile, true);
+  if(message) message.textContent = '';
+}
+
+function showProfileError(msg){
+  const message = document.getElementById('profile-message');
+  if(message) message.textContent = msg;
+}
+
+function refreshWelcomeGate(user){
+  try{
+    if(!user){
+      currentUserProfile = null;
+      hideProfileModal();
+      updateSplashGreeting(null);
+      return;
+    }
+    showSplashUI();
+    const profile = loadUserProfile(user.uid);
+    currentUserProfile = profile;
+    if(profile){
+      updateSplashGreeting(profile);
+      renderAccountInfo(profile);
+      hideProfileModal();
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = buildLiveGreeting(profile);
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = buildLiveGreeting(profile);
+    } else {
+      updateSplashGreeting({ name:'', gender:'masc' });
+      const nameInput = document.getElementById('profile-name');
+      const genderInput = document.getElementById('profile-gender');
+      if(nameInput) nameInput.value = '';
+      if(genderInput) genderInput.value = 'masc';
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = 'Bem-vindo moreno';
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = '';
+      renderAccountInfo({ name:'', gender:'masc' });
+      showProfileModal();
+    }
+  }catch(e){ console.warn('refreshWelcomeGate', e); }
+}
+
+window.saveWelcomeProfile = function(){
+  try{
+    const user = window.auth && window.auth.currentUser;
+    if(!user) return;
+    const name = (document.getElementById('profile-name') || {}).value || '';
+    const gender = (document.getElementById('profile-gender') || {}).value || 'masc';
+    const cleaned = normalizeProfile({ name, gender });
+    if(!cleaned.name){
+      showProfileError('Digite seu nome para continuar.');
+      const nameInput = document.getElementById('profile-name');
+      if(nameInput) nameInput.focus();
+      return;
+    }
+    saveUserProfile(user.uid, cleaned);
+    renderAccountInfo(cleaned);
+    hideProfileModal();
+    showSplashUI();
+    updateSplashGreeting(cleaned);
+    try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+  }catch(e){ console.warn('saveWelcomeProfile', e); }
+};
+
+window.openAccountPanel = openAccountPanel;
+
 
 // helper to persist messages to Firestore (non-blocking)
 async function saveMessageToFirebase(role, text){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'messages');
+    const col = getUserCollection('messages');
+    if (!col) return;
     await addDoc(col, { role, text, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveMessageToFirebase', e); }
 }
@@ -55,7 +271,8 @@ async function saveLearningRecord(kind, payload){
     if(!window.db) return;
     const enabled = localStorage.getItem('agenda_learning') === '1';
     if(!enabled) return;
-    const col = collection(window.db, 'learning');
+    const col = getUserCollection('learning');
+    if (!col) return;
     await addDoc(col, { kind, payload, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveLearningRecord', e); }
 }
@@ -64,7 +281,8 @@ async function saveLearningRecord(kind, payload){
 async function saveAttachmentRecord(name, url, size, mime, ocr){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'attachments');
+    const col = getUserCollection('attachments');
+    if (!col) return;
     await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveAttachmentRecord', e); }
 }
@@ -133,11 +351,17 @@ try{ setTimeout(()=>{ renderAttachmentsPanel(); }, 200); }catch(e){}
 // hide setup banner when GROQ key is present (avoid showing warning on configured installs)
 try{
   setTimeout(()=>{
+    if(typeof window.syncSetupBannerVisibility === 'function'){
+      window.syncSetupBannerVisibility();
+      return;
+    }
     const banner = document.getElementById('setup-banner');
     if(!banner) return;
-    const key = window.GROQ_API_KEY || window.GROQ_API_KEY === '' ? window.GROQ_API_KEY : null;
+    const key = (window.GROQ_API_KEY || '').trim();
     if(key && key !== 'COLE_SUA_CHAVE_GROQ_AQUI' && key !== 'REDACTED_API_KEY'){
       banner.classList.add('hidden');
+    } else {
+      banner.classList.remove('hidden');
     }
   }, 300);
 }catch(e){ console.warn('hide setup banner failed', e); }
@@ -251,7 +475,10 @@ function renderCal(){
 const CAT_COLORS = { trabalho:'#4f8ef7', estudo:'#3ecf8e', pessoal:'#a78bfa', projeto:'#f5a623', outro:'#7a7f8e' };
 
 function saveTasks(){
-  localStorage.setItem('agenda_tasks', JSON.stringify(tasks));
+  try{
+    const key = getUserLocalStorageKey('agenda_tasks');
+    localStorage.setItem(key, JSON.stringify(tasks));
+  }catch(e){ console.warn('saveTasks localStorage write failed', e); }
   if(window.db){
     saveToFirebase(tasks).catch(e=>console.error('saveTasks->saveToFirebase', e));
   }
@@ -260,10 +487,62 @@ function saveTasks(){
   try{ renderSplashTasks(); }catch(e){}
 }
 
+// Load tasks for a given user (localStorage first, then Firestore fallback)
+async function loadTasksForUser(uid){
+  try{
+    // Always clear the in-memory list first so we never keep tasks from the previous account.
+    tasks = [];
+    const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
+    let local = null;
+    try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
+    if(Array.isArray(local)){
+      tasks = local;
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
+    }
+    // fallback to Firestore if available and user present
+    if(window.db && uid){
+      try{
+        const col = getUserCollection('tasks');
+        if(col){
+          const snap = await getDocs(col);
+          const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          if(arr && arr.length){
+            tasks = arr;
+            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+            return;
+          }
+        }
+      }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
+    }
+  }catch(e){ console.warn('loadTasksForUser', e); }
+  // no data -> keep the list empty for this account and render
+  tasks = [];
+  computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+}
+
+// Called from auth state changes to load appropriate tasks
+window.handleAuthStateChange = async function(user){
+  try{
+    if(user){
+      await loadTasksForUser(user.uid);
+      refreshWelcomeGate(user);
+    } else {
+      // not authenticated: clear in-memory tasks so the next account can't inherit them
+      tasks = [];
+      currentUserProfile = null;
+      hideProfileModal();
+      const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+    }
+  }catch(e){ console.warn('handleAuthStateChange', e); }
+}
+
 // ── normalize and aggregates ───────────────────────────────────
 function normalizeName(name){
   if(!name) return '';
-  return name.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()\[\]"]/g,'').replace(/\s+/g,' ').trim();
+  return name.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()\[\]"]+/g,'').replace(/\s+/g,' ').trim();
 }
 
 // try parse simple Portuguese date expressions into ISO YYYY-MM-DD
@@ -389,6 +668,7 @@ function buildExamPlan(examDateStr, attachmentUrl, text){
   const diffDays = Math.max(0, Math.floor((examDate.setHours(0,0,0,0) - (new Date()).setHours(0,0,0,0)) / 86400000));
   const plan = [];
   const steps = [];
+  const examId = 'exam_' + examDateStr;
 
   if(diffDays >= 3){
     steps.push({ offset: -3, name: 'Preparar conteúdo para prova', est: 120 });
@@ -412,7 +692,8 @@ function buildExamPlan(examDateStr, attachmentUrl, text){
       date,
       time: step.offset === 0 ? '14:00' : '18:00',
       cat: 'estudo',
-      est: step.est
+      est: step.est,
+      examId: examId
     };
     // attach the provided attachment to all exam-related plan tasks (prep, revisão, dia da prova)
     if(attachmentUrl) task.attachment = attachmentUrl;
@@ -530,16 +811,38 @@ function addTaskForDate(dateStr){
 
 function editTask(i){
   if(typeof i!=='number') return;
-  const t = tasks[i];
-  if(!t) return;
-  const name = prompt('Nome da tarefa:', t.name) || t.name;
-  const date = prompt('Data (YYYY-MM-DD):', t.date) || t.date;
-  const time = prompt('Hora (HH:MM) — opcional:', t.time||'') || t.time;
-  const cat  = prompt('Categoria (trabalho|estudo|pessoal|projeto|outro):', t.cat) || t.cat;
-  const est  = parseInt(prompt('Estimativa em minutos:', String(t.est||60))||String(t.est||60),10) || t.est || 60;
-  tasks[i] = { name, date, time: time||null, cat, est };
-  saveTasks(); renderCal(); renderTasks();
-  try{ saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
+  const t = tasks[i]; if(!t) return;
+  // Preencher modal com dados atuais
+  const modal = document.getElementById('edit-task-modal');
+  if(!modal) return;
+  modal.classList.remove('hidden');
+  modal.dataset.taskIndex = i;
+  document.getElementById('edit-task-name').value = t.name || '';
+  document.getElementById('edit-task-date').value = t.date || '';
+  document.getElementById('edit-task-time').value = t.time || '';
+  document.getElementById('edit-task-cat').value = t.cat || 'outro';
+  document.getElementById('edit-task-est').value = t.est || 60;
+  // Anexos (exibição simplificada)
+  const attDiv = document.getElementById('edit-task-attachments');
+  attDiv.innerHTML = '';
+  if(t.attachment){
+    const a = document.createElement('div');
+    a.innerHTML = `<a href="${t.attachment}" target="_blank">Ver anexo</a>`;
+    attDiv.appendChild(a);
+  }
+  document.getElementById('edit-task-message').textContent = '';
+  // Cancelar fecha modal
+  document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); };
+  // Adicionar novo anexo (substitui o anterior)
+  document.getElementById('edit-task-add-attachment').onchange = function(ev){
+    const file = ev.target.files[0];
+    if(file){
+      const url = URL.createObjectURL(file);
+      attDiv.innerHTML = `<a href="${url}" target="_blank">${file.name}</a>`;
+      attDiv.dataset.newAttachment = url;
+      attDiv.dataset.newAttachmentName = file.name;
+    }
+  };
 }
 
 function deleteTask(i){
@@ -620,6 +923,35 @@ function closeDatePopover(){ const pop = document.getElementById('date-popover')
 
 // wire popover close button
 setTimeout(()=>{ const b = document.getElementById('popover-close'); if(b) b.addEventListener('click', closeDatePopover); }, 80);
+
+
+// Salvar edição de tarefa
+document.addEventListener('DOMContentLoaded', function(){
+  const form = document.getElementById('edit-task-form');
+  if(form){
+    form.onsubmit = function(ev){
+      ev.preventDefault();
+      const modal = document.getElementById('edit-task-modal');
+      const i = parseInt(modal.dataset.taskIndex, 10);
+      if(isNaN(i) || !tasks[i]) return;
+      const name = document.getElementById('edit-task-name').value.trim();
+      const date = document.getElementById('edit-task-date').value;
+      const time = document.getElementById('edit-task-time').value;
+      const cat  = document.getElementById('edit-task-cat').value;
+      const est  = parseInt(document.getElementById('edit-task-est').value, 10) || 60;
+      // Anexo
+      const attDiv = document.getElementById('edit-task-attachments');
+      let attachment = tasks[i].attachment;
+      if(attDiv.dataset.newAttachment){
+        attachment = attDiv.dataset.newAttachment;
+      }
+      tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
+      saveTasks(); renderCal(); renderTasks();
+      modal.classList.add('hidden');
+      try{ saveEventAndLearning && saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
+    };
+  }
+});
 
 // expõe funções
 window.createTask = createTask;
@@ -712,7 +1044,7 @@ function renderTasks(){
           item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
           const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
           const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
           const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
           const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
           const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
@@ -737,7 +1069,7 @@ function renderTasks(){
           item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
           const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
           const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
           const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
           const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
           const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
@@ -891,7 +1223,7 @@ function addMsg(role, text){
       splashReplies.appendChild(spr);
       splashReplies.scrollTop = splashReplies.scrollHeight;
     }
-  }catch(e){/* ignore splash render errors */}
+  }catch(e){}
 
   // also render a short-lived preview inside the bottom bar when it's visible (chat column hidden)
   try{
@@ -909,7 +1241,7 @@ function addMsg(role, text){
       // auto-remove after a while to avoid growing indefinitely
       setTimeout(()=>{ try{ br.remove(); if(!bottomReplies.children.length) bottomReplies.classList.add('hidden'); }catch(e){} }, 3000);
     }
-  }catch(e){/* ignore bottom render errors */}
+  }catch(e){}
 }
 
 function addThinking(){
@@ -1095,6 +1427,24 @@ async function uploadPendingAttachment(att, persist = true){
   });
 }
 
+function getAttachmentPreviewHost(){
+  try{
+    const splash = document.getElementById('splash');
+    const splashVisible = !!(splash && splash.style.display !== 'none');
+    if(splashVisible){
+      return document.getElementById('splash-replies') || document.getElementById('bottom-replies') || document.body;
+    }
+  }catch(e){}
+  return document.getElementById('bottom-replies') || document.getElementById('splash-replies') || document.body;
+}
+
+function getAttachmentPreviewRoots(){
+  return [
+    document.getElementById('bottom-replies'),
+    document.getElementById('splash-replies')
+  ].filter(Boolean);
+}
+
 async function sendMsg(){
   // prefer bottom input when present (visible), fall back to legacy `inp`
   const bottomInput = document.getElementById('inp-bottom');
@@ -1103,8 +1453,8 @@ async function sendMsg(){
   if(!inpElem) return;
   const text = (inpElem.value || '').trim();
   // allow sending when there are completed attachments even if text is empty
-  const bottomReplies = document.getElementById('bottom-replies');
-  const previews = bottomReplies ? Array.from(bottomReplies.querySelectorAll('.attachment-preview')) : [];
+  const replyRoots = getAttachmentPreviewRoots();
+  const previews = replyRoots.reduce((all, root)=>all.concat(Array.from(root.querySelectorAll('.attachment-preview'))), []);
   const completed = previews.filter(p=> p.querySelector('.attachment-status a'));
   const uploading = previews.filter(p=> !p.querySelector('.attachment-status a'));
   const activeUploading = previews.filter(p=>{ const s = p.querySelector('.attachment-status'); return s && /Enviando/i.test((s.textContent||'')); });
@@ -1138,14 +1488,45 @@ async function sendMsg(){
             if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
             return;
           }
-          const removedNames = matched.map(m=>m.name || '—');
-          // remove them
+
+          // If the date matches a 'onlyExamDay' task, try to remove the whole exam group.
+          const examDayTasks = tasks.filter(t => t.onlyExamDay && t.date === dateTarget);
+          let removed = [];
+          if(examDayTasks.length){
+            // prefer examId grouping when present
+            const examId = examDayTasks[0].examId || null;
+            if(examId){
+              removed = tasks.filter(t => t.examId === examId);
+              tasks = tasks.filter(t => t.examId !== examId);
+            } else {
+              // fallback: remove tasks that are marked onlyExam and occur near the exam date (within 7 days)
+              const dt = new Date(dateTarget + 'T12:00:00');
+              const toRemove = [];
+              for(const t of tasks){
+                try{
+                  if(t && t.onlyExam){
+                    const td = new Date((t.date||'') + 'T12:00:00');
+                    const diff = Math.round((td.getTime() - dt.getTime())/86400000);
+                    if(Math.abs(diff) <= 7) toRemove.push(t);
+                  }
+                }catch(e){}
+              }
+              const names = toRemove.map(x=> x.name || '—');
+              removed = toRemove.slice();
+              tasks = tasks.filter(t => !(t.onlyExam && names.includes(t.name)) );
+            }
+          } else {
+            // non-exam date removal: remove tasks that fall exactly on the date
+            removed = matched.slice();
+            tasks = tasks.filter(t=>t.date!==dateTarget);
+          }
+
+          const removedNames = removed.map(m=>m.name || '—');
           // ensure the user's command isn't left in chat
           removeUserMessage(text);
-          tasks = tasks.filter(t=>t.date!==dateTarget);
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          addMsg('ai', `Removidas ${removedNames.length} tarefas em ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
-          try{ for(const r of matched){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
+          addMsg('ai', `Removidas ${removedNames.length} tarefas relacionadas a ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
+          try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
           inpElem.value=''; inpElem.style.height='42px';
           const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
           if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
@@ -1484,7 +1865,6 @@ function exportPDF(){
 }
 
 // ── import any: file input handler + smart parsing ─────────────
-// trigger import: open file picker and handle arbitrary file types
 function triggerImportAny(){ try{ const el = document.getElementById('import-any-file'); if(el) el.click(); }catch(e){ console.warn('triggerImportAny', e); } }
 
 // wire file input change to read file as text and pass to importer (accepts any file)
@@ -1525,7 +1905,7 @@ setTimeout(()=>{
 
           // create a preview element in bottom-replies so user sees the selected file
           try{
-            const bottomReplies = document.getElementById('bottom-replies') || document.body;
+            const bottomReplies = getAttachmentPreviewHost();
             const preview = document.createElement('div'); preview.className = 'attachment-preview';
             const thumbWrap = document.createElement('div'); thumbWrap.className = 'attachment-thumbwrap';
             if(mime.startsWith('image/')){
@@ -1593,9 +1973,13 @@ setTimeout(()=>{
   try{
     const fileInput = document.getElementById('import-any-file');
     const attachBtn = document.getElementById('input-attach-btn');
+    const splashAttachBtn = document.getElementById('splash-attach-btn');
     // wire attach button inside input to open file picker
     if(attachBtn && fileInput){
       attachBtn.addEventListener('click', ()=>{ fileInput.click(); });
+    }
+    if(splashAttachBtn && fileInput){
+      splashAttachBtn.addEventListener('click', ()=>{ fileInput.click(); });
     }
   }catch(e){ console.warn('bottom action wiring', e); }
 }, 120);
@@ -1646,7 +2030,12 @@ window.triggerImportAny = triggerImportAny;
 // ── Firebase helpers (Firestore) ────────────────────────────
 async function saveToFirebase(tasksList){
   try{
-    const col = collection(window.db, 'tasks');
+    if (!window.auth || !window.auth.currentUser) {
+      console.warn('Not authenticated, skipping Firebase save');
+      return;
+    }
+    const col = getUserCollection('tasks');
+    if (!col) return;
     const existing = await getDocs(col);
     const batch = writeBatch(window.db);
     // delete existing docs
@@ -1658,7 +2047,7 @@ async function saveToFirebase(tasksList){
       const data = Object.assign({}, t);
       if(data._id) delete data._id;
       if(t._id){
-        const ref = doc(window.db, 'tasks', t._id);
+        const ref = doc(window.db, 'users', window.auth.currentUser.uid, 'tasks', t._id);
         batch.set(ref, data);
       } else {
         const newRef = doc(col);
@@ -1673,7 +2062,8 @@ async function saveToFirebase(tasksList){
 async function saveEventToFirebase(type, payload){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'events');
+    const col = getUserCollection('events');
+    if (!col) return;
     await addDoc(col, { type, payload, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveEventToFirebase', e); }
 }
@@ -1786,7 +2176,12 @@ setTimeout(()=>{
 
 async function loadFromFirebase(){
   try{
-    const col   = collection(window.db, 'tasks');
+    if (!window.auth || !window.auth.currentUser) {
+      console.warn('Not authenticated, skipping Firebase load');
+      return;
+    }
+    const col   = getUserCollection('tasks');
+    if (!col) return;
     const snap  = await getDocs(col);
     // preserve Firestore id in _id so we can sync edits/deletes later
     tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
@@ -1798,11 +2193,15 @@ async function loadFromFirebase(){
 // If Firebase is configured, load tasks automatically from Firestore on init
 if(window.db){
   try{
-    // only auto-load from Firebase if there are no local tasks
-    if(!tasks || tasks.length===0){
-      loadFromFirebase().catch(e=>console.warn('auto loadFromFirebase', e));
+    // only auto-load from Firebase if there are no local tasks AND a user is signed in
+    if(window.auth && window.auth.currentUser){
+      if(!tasks || tasks.length===0){
+        loadFromFirebase().catch(e=>console.warn('auto loadFromFirebase', e));
+      } else {
+        console.debug('Local tasks present; skipping auto loadFromFirebase to avoid overwriting.');
+      }
     } else {
-      console.debug('Local tasks present; skipping auto loadFromFirebase to avoid overwriting.');
+      console.debug('No authenticated user; skipping auto loadFromFirebase.');
     }
   }catch(e){ console.warn('loadFromFirebase init', e); }
 }
@@ -1863,6 +2262,29 @@ setTimeout(()=>{
 }, 60);
 renderCal();
 renderTasks();
+// if the auth state was already established before app.js loaded, ensure welcome gate runs
+function initWelcomeGateRetry(attempt = 0){
+  try{
+    if(window && window.auth && window.auth.currentUser){
+      refreshWelcomeGate(window.auth.currentUser);
+      return;
+    }
+    if(attempt < 20){
+      setTimeout(()=>initWelcomeGateRetry(attempt + 1), 150);
+    }
+  }catch(e){ console.warn('welcome gate init check failed', e); }
+}
+setTimeout(()=>initWelcomeGateRetry(0), 120);
+// wire logout modal buttons
+setTimeout(()=>{
+  try{
+    const cancelBtn = document.getElementById('logout-cancel-btn');
+    const confirmBtn = document.getElementById('logout-confirm-btn');
+    const modal = document.getElementById('logout-modal');
+    if(cancelBtn){ cancelBtn.addEventListener('click', ()=>{ if(modal) modal.classList.add('hidden'); }); }
+    if(confirmBtn){ confirmBtn.addEventListener('click', async ()=>{ try{ await window.performLogout(); }catch(e){ console.warn('performLogout click failed', e); } }); }
+  }catch(e){ console.warn('wire logout modal failed', e); }
+}, 120);
 // expõe funções usadas em handlers inline
 window.sendMsg = sendMsg;
 window.handleKey = handleKey;
@@ -1896,3 +2318,81 @@ try{
     alert('Histórico local limpo.');
   }); }
 }catch(e){ console.warn('init learning toggle', e); }
+
+// Logout handler
+// show logout modal (actual logout performed by performLogout)
+window.handleLogout = function(){
+  const modal = document.getElementById('logout-modal'); if(!modal) return;
+  modal.classList.remove('hidden');
+}
+
+function showLoggedOutUI(){
+  try{
+    const authContainer = document.getElementById('auth-container');
+    const appElement = document.querySelector('.app');
+    const setupBanner = document.getElementById('setup-banner');
+    const bottom = document.getElementById('bottom-ia-bar');
+    const splash = document.getElementById('splash');
+    const profileModal = document.getElementById('profile-modal');
+    if(authContainer){
+      authContainer.classList.add('show');
+      authContainer.style.display = 'flex';
+    }
+    if(appElement) appElement.style.display = 'none';
+    if(setupBanner) setupBanner.style.display = 'none';
+    if(bottom) bottom.style.display = 'none';
+    if(splash) splash.style.display = 'none';
+    if(profileModal) profileModal.classList.add('hidden');
+  }catch(e){ console.warn('showLoggedOutUI', e); }
+}
+
+// perform actual logout (previous handleLogout implementation)
+window.performLogout = async function(){
+  try {
+    console.debug('performLogout: starting logout flow');
+    // Save any pending tasks before logout (only if authenticated)
+    if (tasks && tasks.length > 0) {
+      if(window.auth && window.auth.currentUser){
+        // fire-and-forget: don't block logout on network/storage latency
+        saveToFirebase(tasks).catch(e => console.warn('saveToFirebase before logout', e));
+      } else {
+        console.debug('Not authenticated — skipping Firebase save before logout');
+      }
+      try{
+        const key = getUserLocalStorageKey('agenda_tasks');
+        localStorage.setItem(key, JSON.stringify(tasks));
+        // also save attachments and aggregates under user-scoped keys
+        try{ const akey = getUserLocalStorageKey('agenda_attachments'); localStorage.setItem(akey, localStorage.getItem('agenda_attachments')||'[]'); }catch(e){}
+        try{ const gkey = getUserLocalStorageKey('agenda_aggregates'); localStorage.setItem(gkey, localStorage.getItem('agenda_aggregates')||'{}'); }catch(e){}
+      }catch(e){ console.warn('persist before logout failed', e); }
+    }
+
+    // Clear local state
+    tasks = [];
+    history = [];
+    pendingAttachments = [];
+    localStorage.removeItem('agenda_timer');
+    localStorage.removeItem('agenda_aggregates');
+
+    // hide logout modal if open
+    try{ const modal = document.getElementById('logout-modal'); if(modal) modal.classList.add('hidden'); }catch(e){}
+
+    // Sign out - prefer the global window.signOut if present, else use imported signOut
+    try{
+      const fn = (window && window.signOut) ? window.signOut : (typeof signOut === 'function' ? signOut : null);
+      if(fn){
+        await fn(window.auth);
+        showLoggedOutUI();
+      } else {
+        console.warn('performLogout: no signOut function available');
+      }
+    }catch(e){ console.error('performLogout -> signOut failed', e); throw e; }
+
+    // ensure the UI reflects logout immediately even if auth callback is delayed
+    showLoggedOutUI();
+    try{ if(window.handleAuthStateChange) window.handleAuthStateChange(null); }catch(e){}
+  } catch (error) {
+    console.error('Logout error:', error);
+    alert('Erro ao fazer logout. Tente novamente.');
+  }
+}

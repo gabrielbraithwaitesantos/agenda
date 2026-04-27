@@ -13,6 +13,26 @@ npm run dev
 
 2. Abra `http://localhost:8000`.
 
+Firebase Hosting
+
+1. Faça login na CLI do Firebase:
+
+```bash
+npx firebase-tools login
+```
+
+2. Publique o site:
+
+```bash
+npm run deploy
+```
+
+Se você preferir rodar a CLI sem o script, use:
+
+```bash
+npx firebase-tools deploy --only hosting
+```
+
 O que tem neste repositório
 
 - `index.html` — entrada da aplicação (contém `firebaseConfig` e pontos do UI como splash, calendário e painel direito).
