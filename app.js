@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -118,8 +118,22 @@ function showProfileModal(){
   if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
 }
 
-function loadUserProfile(uid){
+async function loadUserProfile(uid){
   try{
+    if(!uid) return null;
+    if(window.db){
+      try{
+        const snap = await getDoc(doc(window.db, 'users', uid));
+        if(snap.exists()){
+          const data = snap.data() || {};
+          const profile = normalizeProfile(data.profile || {});
+          if(profile.name){
+            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
+            return profile;
+          }
+        }
+      }catch(e){ console.warn('loadUserProfile firestore', e); }
+    }
     const raw = localStorage.getItem(getProfileStorageKey(uid));
     if(!raw) return null;
     const parsed = JSON.parse(raw);
@@ -129,12 +143,17 @@ function loadUserProfile(uid){
   }catch(e){ console.warn('loadUserProfile', e); return null; }
 }
 
-function saveUserProfile(uid, profile){
+async function saveUserProfile(uid, profile){
   const cleaned = normalizeProfile(profile || {});
   if(!cleaned.name) return null;
   localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
   currentUserProfile = cleaned;
   updateSplashGreeting(cleaned);
+  try{
+    if(window.db && uid){
+      await setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true });
+    }
+  }catch(e){ console.warn('saveUserProfile firestore', e); }
   return cleaned;
 }
 
@@ -146,7 +165,7 @@ function renderAccountInfo(profile){
     el.textContent = 'Você precisa estar logado para ver os dados da conta.';
     return;
   }
-  const p = normalizeProfile(profile || currentUserProfile || loadUserProfile(user.uid) || {});
+  const p = normalizeProfile(profile || currentUserProfile || {});
   const displayName = p.name || 'Não definido';
   const genderLabel = p.gender === 'fem' ? 'Feminino' : 'Masculino';
   el.innerHTML = `
@@ -156,11 +175,11 @@ function renderAccountInfo(profile){
   `;
 }
 
-function openAccountPanel(){
+async function openAccountPanel(){
   try{
     const user = window.auth && window.auth.currentUser;
     if(!user) return;
-    const profile = loadUserProfile(user.uid) || currentUserProfile || { name:'', gender:'masc' };
+    const profile = (await loadUserProfile(user.uid)) || currentUserProfile || { name:'', gender:'masc' };
     currentUserProfile = normalizeProfile(profile);
     const nameInput = document.getElementById('profile-name');
     const genderInput = document.getElementById('profile-gender');
@@ -196,7 +215,7 @@ function showProfileError(msg){
   if(message) message.textContent = msg;
 }
 
-function refreshWelcomeGate(user){
+async function refreshWelcomeGate(user){
   try{
     if(!user){
       currentUserProfile = null;
@@ -205,7 +224,7 @@ function refreshWelcomeGate(user){
       return;
     }
     showSplashUI();
-    const profile = loadUserProfile(user.uid);
+    const profile = await loadUserProfile(user.uid);
     currentUserProfile = profile;
     if(profile){
       updateSplashGreeting(profile);
@@ -231,7 +250,7 @@ function refreshWelcomeGate(user){
   }catch(e){ console.warn('refreshWelcomeGate', e); }
 }
 
-window.saveWelcomeProfile = function(){
+window.saveWelcomeProfile = async function(){
   try{
     const user = window.auth && window.auth.currentUser;
     if(!user) return;
@@ -244,7 +263,7 @@ window.saveWelcomeProfile = function(){
       if(nameInput) nameInput.focus();
       return;
     }
-    saveUserProfile(user.uid, cleaned);
+    await saveUserProfile(user.uid, cleaned);
     renderAccountInfo(cleaned);
     hideProfileModal();
     showSplashUI();
@@ -493,7 +512,7 @@ function saveTasks(){
   try{ renderSplashTasks(); }catch(e){}
 }
 
-// Load tasks for a given user (localStorage first, then Firestore fallback)
+// Load tasks for a given user (Firestore first, then localStorage fallback)
 async function loadTasksForUser(uid){
   try{
     // Always clear the in-memory list first so we never keep tasks from the previous account.
@@ -501,26 +520,37 @@ async function loadTasksForUser(uid){
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
-    if(Array.isArray(local)){
-      tasks = local;
-      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      return;
-    }
-    // fallback to Firestore if available and user present
+
+    let remote = null;
     if(window.db && uid){
       try{
         const col = getUserCollection('tasks');
         if(col){
           const snap = await getDocs(col);
           const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-          if(arr && arr.length){
-            tasks = arr;
-            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-            return;
-          }
+          if(Array.isArray(arr)) remote = arr;
         }
       }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
+    }
+
+    if(Array.isArray(remote) && remote.length){
+      tasks = remote;
+      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
+    }
+
+    if(Array.isArray(local) && local.length){
+      tasks = local;
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
+    }
+
+    if(Array.isArray(remote)){
+      tasks = remote;
+      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
     }
   }catch(e){ console.warn('loadTasksForUser', e); }
   // no data -> keep the list empty for this account and render
