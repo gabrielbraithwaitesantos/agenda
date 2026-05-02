@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, getDoc, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, getDocFromCache, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -122,8 +122,11 @@ async function loadUserProfile(uid){
   try{
     if(!uid) return null;
     if(window.db){
+      const docRef = doc(window.db, 'users', uid);
+      
+      // Try getDocFromServer first (bypasses offline detection)
       try{
-        const snap = await getDoc(doc(window.db, 'users', uid));
+        const snap = await getDocFromServer(docRef);
         if(snap.exists()){
           const data = snap.data() || {};
           const profile = normalizeProfile(data.profile || {});
@@ -132,8 +135,43 @@ async function loadUserProfile(uid){
             return profile;
           }
         }
-      }catch(e){ console.warn('loadUserProfile firestore', e); }
+      }catch(e){
+        console.warn('loadUserProfile getDocFromServer failed', e);
+      }
+      
+      // Fallback: try regular getDoc
+      try{
+        const snap = await getDoc(docRef);
+        if(snap.exists()){
+          const data = snap.data() || {};
+          const profile = normalizeProfile(data.profile || {});
+          if(profile.name){
+            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
+            return profile;
+          }
+        }
+      }catch(e){
+        console.warn('loadUserProfile getDoc failed', e);
+      }
+      
+      // Fallback: try cache
+      try{
+        if(typeof getDocFromCache === 'function'){
+          const cacheSnap = await getDocFromCache(docRef);
+          if(cacheSnap && cacheSnap.exists()){
+            const data2 = cacheSnap.data() || {};
+            const profile2 = normalizeProfile(data2.profile || {});
+            if(profile2.name){
+              console.debug('DEBUG: loadUserProfile - returned from cache for uid=', uid);
+              localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile2));
+              return profile2;
+            }
+          }
+        }
+      }catch(e){ console.warn('loadUserProfile cache fallback failed', e); }
     }
+    
+    // Final fallback: read from localStorage only
     const raw = localStorage.getItem(getProfileStorageKey(uid));
     if(!raw) return null;
     const parsed = JSON.parse(raw);
@@ -517,6 +555,7 @@ async function loadTasksForUser(uid){
   try{
     // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
+    try{ console.debug('DEBUG: loadTasksForUser start uid=', uid); }catch(e){}
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
@@ -528,10 +567,13 @@ async function loadTasksForUser(uid){
         if(col){
           const snap = await getDocs(col);
           const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          try{ console.debug('DEBUG: loadTasksForUser firestore read docs=', arr.length); }catch(e){}
           if(Array.isArray(arr)) remote = arr;
         }
       }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
     }
+
+    try{ console.debug('DEBUG: loadTasksForUser localCount=', Array.isArray(local)? local.length : 0, ' remoteCount=', Array.isArray(remote)? remote.length : 0, ' storageKey=', key); }catch(e){}
 
     if(Array.isArray(remote) && remote.length){
       tasks = remote;
@@ -561,6 +603,7 @@ async function loadTasksForUser(uid){
 // Called from auth state changes to load appropriate tasks
 window.handleAuthStateChange = async function(user){
   try{
+    try{ console.debug('DEBUG: handleAuthStateChange invoked, user=', user && user.uid); }catch(e){}
     if(user){
       // First: clear old UI elements from previous account BEFORE loading new data
       tasks = [];
@@ -576,7 +619,9 @@ window.handleAuthStateChange = async function(user){
       if(el) el.innerHTML = '';
       
       // Second: load user-specific tasks, messages, and profile
+      try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
       await loadTasksForUser(user.uid);
+      try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
       try{
         const userMessages = await loadMessagesFromFirebase();
         if(userMessages && userMessages.length > 0){
@@ -2258,11 +2303,13 @@ async function loadFromFirebase(){
       console.warn('Not authenticated, skipping Firebase load');
       return;
     }
+    try{ console.debug('DEBUG: loadFromFirebase start uid=', window.auth.currentUser && window.auth.currentUser.uid); }catch(e){}
     const col   = getUserCollection('tasks');
     if (!col) return;
     const snap  = await getDocs(col);
     // preserve Firestore id in _id so we can sync edits/deletes later
     tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
+    try{ console.debug('DEBUG: loadFromFirebase loaded tasks=', tasks && tasks.length); }catch(e){}
     renderCal();
     renderTasks();
     try{ renderSplashTasks(); }catch(e){}
