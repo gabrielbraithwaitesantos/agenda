@@ -40,7 +40,7 @@
 
   // ── FIREBASE (CDN imports + config) ─────────────────────
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getFirestore, enableIndexedDbPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { initializeFirestore, persistentLocalCache } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -54,15 +54,10 @@
     measurementId: "G-CV2BKY24KN"
   };
   const app = initializeApp(firebaseConfig);
-  const db  = getFirestore(app);
+  const db  = initializeFirestore(app, {
+    localCache: persistentLocalCache()
+  });
   const storage = getStorage(app);
-
-  try{
-    await enableIndexedDbPersistence(db);
-    console.debug('DEBUG: Firestore IndexedDB persistence enabled');
-  }catch(e){
-    console.warn('Firestore persistence not available', e);
-  }
 
   const auth = getAuth(app);
   window.auth = auth;
