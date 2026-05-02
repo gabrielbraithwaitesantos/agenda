@@ -153,14 +153,15 @@ async function loadUserProfile(uid){
 async function saveUserProfile(uid, profile){
   const cleaned = normalizeProfile(profile || {});
   if(!cleaned.name) return null;
+  // Save locally and update UI immediately — never await Firestore here
   localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
   currentUserProfile = cleaned;
   updateSplashGreeting(cleaned);
-  try{
-    if(window.db && uid){
-      await setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true });
-    }
-  }catch(e){ console.warn('saveUserProfile firestore', e); }
+  // Persist to Firestore in background (fire-and-forget)
+  if(window.db && uid){
+    setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true })
+      .catch(e => console.warn('saveUserProfile firestore:', e.code || e.message));
+  }
   return cleaned;
 }
 
@@ -228,6 +229,7 @@ function syncProfilePreview(){
   updateSplashGreeting(profile, true);
   if(message) message.textContent = '';
 }
+window.syncProfilePreview = syncProfilePreview;
 
 function showProfileError(msg){
   const message = document.getElementById('profile-message');
@@ -556,31 +558,51 @@ async function loadTasksForUser(uid){
     }
 
     // ── Firestore fetch ──────────────────────────────────────────
-    // Always try the server directly (required for cross-device / anon tabs).
-    // If that fails, fall back to the local cache (offline), then localStorage.
+    // Strategy: race getDocsFromServer against an 8s timeout.
+    // - If server responds in time → authoritative data, update UI.
+    // - If timeout fires first → fall back to local cache or localStorage immediately,
+    //   then re-render when the server promise eventually resolves in background.
     let remote = null;
     let fromServer = false;
     if(window.db && uid){
       const col = getUserCollection('tasks');
       if(col){
-        // Attempt 1: server (authoritative, cross-device)
+        const TIMEOUT_MS = 8000;
+        const serverPromise = getDocsFromServer(col);
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('timeout')), TIMEOUT_MS)
+        );
+
+        console.log('[loadTasksForUser] fetching from Firestore server (timeout=' + TIMEOUT_MS + 'ms)…');
         try{
-          console.log('[loadTasksForUser] fetching from Firestore server…');
-          const snap = await getDocsFromServer(col);
+          const snap = await Promise.race([serverPromise, timeoutPromise]);
           remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
           fromServer = true;
           console.log('[loadTasksForUser] server OK —', remote.length, 'docs');
         }catch(serverErr){
-          console.warn('[loadTasksForUser] server fetch failed:', serverErr.code || serverErr.message);
-          // Attempt 2: local Firestore cache (works offline, may be empty on anon tab)
+          const reason = serverErr.message === 'timeout' ? 'timeout' : (serverErr.code || serverErr.message);
+          console.warn('[loadTasksForUser] server fetch failed (' + reason + '), trying cache…');
+
+          // If it was a timeout, the server promise is still running — attach a background
+          // handler so we re-render with fresh data when it eventually resolves
+          if(serverErr.message === 'timeout'){
+            serverPromise.then(snap2 => {
+              const fresh = snap2.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+              console.log('[loadTasksForUser] background server resolved —', fresh.length, 'docs');
+              tasks = fresh;
+              try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+              computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+            }).catch(()=>{});
+          }
+
+          // Attempt 2: local Firestore cache (instant, works offline)
           try{
             const snap = await getDocs(col);
             remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
             console.log('[loadTasksForUser] cache fallback —', remote.length, 'docs',
               snap.metadata.fromCache ? '(cache)' : '(server)');
-            // If cache returned 0 in anon tab, remote stays [] — handled below
           }catch(cacheErr){
-            console.warn('[loadTasksForUser] cache fallback also failed:', cacheErr.code || cacheErr.message);
+            console.warn('[loadTasksForUser] cache also failed:', cacheErr.code || cacheErr.message);
           }
         }
       }
