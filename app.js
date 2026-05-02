@@ -186,20 +186,32 @@ async function openAccountPanel(){
   try{
     const user = window.auth && window.auth.currentUser;
     if(!user) return;
-    const profile = (await loadUserProfile(user.uid)) || currentUserProfile || { name:'', gender:'masc' };
-    currentUserProfile = normalizeProfile(profile);
+
+    // Open the modal immediately with whatever we have — don't await Firestore
+    const instant = currentUserProfile || { name:'', gender:'masc' };
     const nameInput = document.getElementById('profile-name');
     const genderInput = document.getElementById('profile-gender');
-    if(nameInput) nameInput.value = currentUserProfile.name || '';
-    if(genderInput) genderInput.value = currentUserProfile.gender || 'masc';
-    renderAccountInfo(currentUserProfile);
+    if(nameInput) nameInput.value = instant.name || '';
+    if(genderInput) genderInput.value = instant.gender || 'masc';
+    renderAccountInfo(instant);
     const preview = document.getElementById('profile-preview');
-    if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo moreno';
     const liveExample = document.getElementById('profile-live-example');
-    if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    if(liveExample) liveExample.textContent = instant.name ? buildLiveGreeting(instant) : '';
     const modal = document.getElementById('profile-modal');
     if(modal) modal.classList.remove('hidden');
     if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+
+    // Refresh from Firestore in background — updates fields if they load later
+    loadUserProfile(user.uid).then(profile => {
+      if(!profile) return;
+      currentUserProfile = normalizeProfile(profile);
+      if(nameInput && document.activeElement !== nameInput) nameInput.value = currentUserProfile.name || '';
+      if(genderInput && document.activeElement !== genderInput) genderInput.value = currentUserProfile.gender || 'masc';
+      renderAccountInfo(currentUserProfile);
+      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+      if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    }).catch(()=>{});
   }catch(e){ console.warn('openAccountPanel', e); }
 }
 
@@ -544,62 +556,70 @@ async function loadTasksForUser(uid){
     }
 
     // ── Firestore fetch ──────────────────────────────────────────
-    // Strategy: getDocs() first — it uses local cache instantly if offline and hits
-    // the server when online. Then try getDocsFromServer() in the background to
-    // refresh with authoritative data (important for cross-device sync).
+    // Always try the server directly (required for cross-device / anon tabs).
+    // If that fails, fall back to the local cache (offline), then localStorage.
     let remote = null;
-    let firestoreOk = false;
+    let fromServer = false;
     if(window.db && uid){
       const col = getUserCollection('tasks');
       if(col){
-        // Step 1: getDocs — works offline (cache) AND online (server), never throws on connectivity
+        // Attempt 1: server (authoritative, cross-device)
         try{
-          console.log('[loadTasksForUser] getDocs (cache-or-server)…');
-          const snap = await getDocs(col);
+          console.log('[loadTasksForUser] fetching from Firestore server…');
+          const snap = await getDocsFromServer(col);
           remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-          firestoreOk = true;
-          console.log('[loadTasksForUser] getDocs OK — docs:', remote.length,
-            snap.metadata.fromCache ? '(from cache)' : '(from server)');
-        }catch(e){
-          console.warn('[loadTasksForUser] getDocs failed:', e.code || e.message);
-        }
-
-        // Step 2: if getDocs returned from cache (offline/stale), also fire a server request
-        // to get fresh data — render immediately with cache, then re-render when server responds
-        if(firestoreOk){
-          // always attempt server refresh — non-blocking, re-renders when it resolves
-          getDocsFromServer(col).then(snap2 => {
-            const fresh = snap2.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            console.log('[loadTasksForUser] server refresh — docs:', fresh.length);
-            tasks = fresh;
-            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          }).catch(e=>{
-            console.warn('[loadTasksForUser] server refresh failed (staying with cached data):', e.code || e.message);
-          });
+          fromServer = true;
+          console.log('[loadTasksForUser] server OK —', remote.length, 'docs');
+        }catch(serverErr){
+          console.warn('[loadTasksForUser] server fetch failed:', serverErr.code || serverErr.message);
+          // Attempt 2: local Firestore cache (works offline, may be empty on anon tab)
+          try{
+            const snap = await getDocs(col);
+            remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+            console.log('[loadTasksForUser] cache fallback —', remote.length, 'docs',
+              snap.metadata.fromCache ? '(cache)' : '(server)');
+            // If cache returned 0 in anon tab, remote stays [] — handled below
+          }catch(cacheErr){
+            console.warn('[loadTasksForUser] cache fallback also failed:', cacheErr.code || cacheErr.message);
+          }
         }
       }
     }
 
-    console.log('[loadTasksForUser] summary — firestoreOk:', firestoreOk,
-      '| remote:', remote ? remote.length : 'null',
+    console.log('[loadTasksForUser] summary — fromServer:', fromServer,
+      '| remote:', remote !== null ? remote.length : 'null',
       '| local:', Array.isArray(local) ? local.length : 'null');
 
-    if(firestoreOk){
-      tasks = Array.isArray(remote) ? remote : [];
-      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      // Firestore returned 0 but localStorage has tasks → first-time sync / migration
-      if(!tasks.length && Array.isArray(local) && local.length){
-        console.log('[loadTasksForUser] Firestore empty, syncing', local.length, 'local tasks up');
-        tasks = local;
+    // Remote data available (from server or cache)
+    if(remote !== null){
+      if(remote.length > 0){
+        // Firestore has tasks — use them as source of truth
+        tasks = remote;
+        try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
         computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-        if(window.db) saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
+        return;
       }
-      return;
+      // Remote returned 0 docs. Two cases:
+      // a) fromServer=true → account is genuinely empty OR first-time on this device
+      //    If localStorage has tasks, push them up (migration). If not, account is empty.
+      // b) fromServer=false (cache) → anon tab with empty cache. Fall through to localStorage.
+      if(fromServer){
+        if(Array.isArray(local) && local.length){
+          console.log('[loadTasksForUser] server empty, syncing', local.length, 'local tasks up');
+          tasks = local;
+          computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+          saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
+        } else {
+          console.log('[loadTasksForUser] server confirms account is empty');
+          tasks = [];
+          computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        }
+        return;
+      }
+      // fromServer=false, remote=0: treat as unreachable and fall through to localStorage
     }
 
-    // Firestore completely unreachable — use localStorage
+    // Firestore unreachable and no cache — use localStorage
     if(Array.isArray(local) && local.length){
       console.log('[loadTasksForUser] Firestore unreachable, using localStorage —', local.length, 'tasks');
       tasks = local;
@@ -2175,18 +2195,25 @@ async function saveToFirebase(tasksList){
     const col = getUserCollection('tasks');
     if (!col) return;
 
-    // Always write localStorage first so a network failure never loses data
+    // Write localStorage first — network failure must never lose data
+    try{ localStorage.setItem(uid + '_agenda_tasks', JSON.stringify(tasksList)); }catch(e){}
+
+    // Use server read to get existing docs so the delete list is authoritative.
+    // If server unreachable, skip the delete step — Firestore offline queue will
+    // handle the writes when connectivity resumes, and we never wipe data blindly.
+    let existingDocs = [];
+    let serverReachable = false;
     try{
-      const lsKey = uid + '_agenda_tasks';
-      localStorage.setItem(lsKey, JSON.stringify(tasksList));
-    }catch(e){}
+      existingDocs = (await getDocsFromServer(col)).docs;
+      serverReachable = true;
+    }catch(e){
+      console.warn('[saveToFirebase] server unreachable, queuing writes offline:', e.code || e.message);
+    }
 
     const batch = writeBatch(window.db);
-    // Read existing docs to know which to delete — use cache so this works offline too
-    let existingDocs = [];
-    try{ existingDocs = (await getDocs(col)).docs; }catch(e){ console.warn('saveToFirebase: getDocs for delete failed', e.code || e.message); }
-    for(const d of existingDocs) batch.delete(d.ref);
-
+    if(serverReachable){
+      for(const d of existingDocs) batch.delete(d.ref);
+    }
     for(const t of tasksList){
       const data = Object.assign({}, t);
       delete data._id;
@@ -2317,31 +2344,7 @@ setTimeout(()=>{
   }catch(e){ console.warn('wire spinner buttons', e); }
 }, 120);
 
-async function loadFromFirebase(){
-  try{
-    if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase load');
-      return;
-    }
-    try{ console.debug('DEBUG: loadFromFirebase start uid=', window.auth.currentUser && window.auth.currentUser.uid); }catch(e){}
-    const col   = getUserCollection('tasks');
-    if (!col) return;
-    let snap = null;
-    try{
-      snap = await getDocsFromServer(col);
-      try{ console.debug('DEBUG: loadFromFirebase server docs=', snap.docs.length); }catch(e){}
-    }catch(serverErr){
-      console.warn('loadFromFirebase getDocsFromServer failed', serverErr);
-      snap = await getDocs(col);
-    }
-    // preserve Firestore id in _id so we can sync edits/deletes later
-    tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
-    try{ console.debug('DEBUG: loadFromFirebase loaded tasks=', tasks && tasks.length); }catch(e){}
-    renderCal();
-    renderTasks();
-    try{ renderSplashTasks(); }catch(e){}
-  }catch(e){ console.error('loadFromFirebase', e); }
-}
+
 // Load messages from Firestore for current user
 async function loadMessagesFromFirebase(){
   try{
@@ -2355,20 +2358,8 @@ async function loadMessagesFromFirebase(){
 }
 
 // If Firebase is configured, load tasks automatically from Firestore on init
-if(window.db){
-  try{
-    // only auto-load from Firebase if there are no local tasks AND a user is signed in
-    if(window.auth && window.auth.currentUser){
-      if(!tasks || tasks.length===0){
-        loadFromFirebase().catch(e=>console.warn('auto loadFromFirebase', e));
-      } else {
-        console.debug('Local tasks present; skipping auto loadFromFirebase to avoid overwriting.');
-      }
-    } else {
-      console.debug('No authenticated user; skipping auto loadFromFirebase.');
-    }
-  }catch(e){ console.warn('loadFromFirebase init', e); }
-}
+// Tasks are loaded exclusively via handleAuthStateChange → loadTasksForUser
+// after Firebase Auth resolves. No auto-load here.
 
 // ── init ──────────────────────────────────────────────────────────
 // splash control: show splash by default; user can type or skip
