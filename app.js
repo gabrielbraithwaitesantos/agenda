@@ -541,21 +541,18 @@ function saveTasks(){
   try{ renderSplashTasks(); }catch(e){}
 }
 
-// Load tasks for a given user (Firestore first, then localStorage fallback)
+// Load tasks for a given user (Firestore first, localStorage fallback)
 async function loadTasksForUser(uid){
   try{
-    // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
     activeTimer = null;
-    // Load this user's timer state
     try{ activeTimer = JSON.parse(localStorage.getItem(uid + '_agenda_timer') || 'null'); }catch(e){ activeTimer = null; }
-    // Load this user's aggregates for immediate UI render
     try{ const ex = JSON.parse(localStorage.getItem(uid + '_agenda_aggregates') || 'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
-    try{ console.debug('DEBUG: loadTasksForUser start uid=', uid); }catch(e){}
+
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
-    // migrate legacy tasks stored without uid prefix (one-time migration)
+    // one-time migration: move legacy unscoped key to uid-scoped key
     if(uid && (!Array.isArray(local) || !local.length)){
       try{
         const legacy = JSON.parse(localStorage.getItem('agenda_tasks') || 'null');
@@ -563,63 +560,67 @@ async function loadTasksForUser(uid){
           local = legacy;
           localStorage.setItem(key, JSON.stringify(legacy));
           localStorage.removeItem('agenda_tasks');
-          console.log('migrated legacy agenda_tasks to uid-scoped key');
+          console.log('[loadTasksForUser] migrated legacy agenda_tasks →', key);
         }
-      }catch(e){ console.warn('legacy tasks migration failed', e); }
+      }catch(e){ console.warn('[loadTasksForUser] legacy migration failed', e); }
     }
 
+    // ── Firestore fetch ──────────────────────────────────────────
     let remote = null;
+    let firestoreOk = false;
     if(window.db && uid){
-      try{
-        const col = getUserCollection('tasks');
-        if(col){
-          let snap = null;
+      const col = getUserCollection('tasks');
+      if(col){
+        // Try server-first (mandatory for anon/cross-device — bypasses local cache)
+        try{
+          console.log('[loadTasksForUser] fetching from Firestore server…');
+          const snap = await getDocsFromServer(col);
+          remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          firestoreOk = true;
+          console.log('[loadTasksForUser] Firestore server OK — docs:', remote.length);
+        }catch(serverErr){
+          console.warn('[loadTasksForUser] getDocsFromServer failed:', serverErr.code || serverErr.message);
+          // Fallback: cached read (works offline)
           try{
-            snap = await getDocsFromServer(col);
-            try{ console.debug('DEBUG: loadTasksForUser server docs=', snap.docs.length); }catch(e){}
-          }catch(serverErr){
-            console.warn('loadTasksForUser getDocsFromServer failed', serverErr);
-            try{
-              snap = await getDocs(col);
-              try{ console.debug('DEBUG: loadTasksForUser fallback getDocs docs=', snap.docs.length); }catch(e){}
-            }catch(fallbackErr){
-              console.warn('loadTasksForUser getDocs fallback failed', fallbackErr);
-            }
-          }
-          if(snap){
-            const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            try{ console.debug('DEBUG: loadTasksForUser firestore read docs=', arr.length); }catch(e){}
-            if(Array.isArray(arr)) remote = arr;
+            const snap = await getDocs(col);
+            remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+            firestoreOk = true;
+            console.log('[loadTasksForUser] Firestore cache fallback OK — docs:', remote.length);
+          }catch(cacheErr){
+            console.warn('[loadTasksForUser] getDocs cache fallback failed:', cacheErr.code || cacheErr.message);
           }
         }
-      }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
+      }
     }
 
-    try{ console.debug('DEBUG: loadTasksForUser localCount=', Array.isArray(local)? local.length : 0, ' remoteCount=', Array.isArray(remote)? remote.length : 0, ' storageKey=', key); }catch(e){}
+    console.log('[loadTasksForUser] summary — firestoreOk:', firestoreOk,
+      '| remote:', remote ? remote.length : 'null',
+      '| local:', Array.isArray(local) ? local.length : 'null');
 
-    if(Array.isArray(remote) && remote.length){
-      tasks = remote;
+    // Firestore is the source of truth when reachable (even if 0 tasks — account may be empty)
+    if(firestoreOk){
+      tasks = Array.isArray(remote) ? remote : [];
       try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      // if Firestore returned 0 but we have local tasks, push them up (first-time sync / migration)
+      if(!tasks.length && Array.isArray(local) && local.length){
+        console.log('[loadTasksForUser] Firestore empty but local has tasks — syncing up', local.length, 'tasks');
+        tasks = local;
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        if(window.db) saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync local→firestore failed', e));
+      }
       return;
     }
 
+    // Firestore unreachable — use localStorage
     if(Array.isArray(local) && local.length){
+      console.log('[loadTasksForUser] using localStorage fallback —', local.length, 'tasks');
       tasks = local;
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      // push local-only tasks up to Firestore (covers migration from localStorage-only usage)
-      if(window.db) saveToFirebase(tasks).catch(e=>console.warn('initial sync local→firestore', e));
       return;
     }
+  }catch(e){ console.warn('[loadTasksForUser] unexpected error', e); }
 
-    if(Array.isArray(remote)){
-      tasks = remote;
-      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      return;
-    }
-  }catch(e){ console.warn('loadTasksForUser', e); }
-  // no data -> keep the list empty for this account and render
   tasks = [];
   computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
 }
