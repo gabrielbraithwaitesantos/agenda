@@ -112,63 +112,41 @@ function showProfileModal(){
 async function loadUserProfile(uid){
   try{
     if(!uid) return null;
+
+    // Always try localStorage first for instant render — overwrite below if Firestore responds
+    const lsKey = getProfileStorageKey(uid);
+    let localProfile = null;
+    try{
+      const raw = localStorage.getItem(lsKey);
+      if(raw){ const p = normalizeProfile(JSON.parse(raw)); if(p.name) localProfile = p; }
+    }catch(e){}
+
     if(window.db){
       const docRef = doc(window.db, 'users', uid);
-      
-      // Try getDocFromServer first (bypasses offline detection)
-      try{
-        const snap = await getDocFromServer(docRef);
-        if(snap.exists()){
-          const data = snap.data() || {};
-          const profile = normalizeProfile(data.profile || {});
-          if(profile.name){
-            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
-            return profile;
-          }
-        }
-      }catch(e){
-        console.warn('loadUserProfile getDocFromServer failed', e);
-      }
-      
-      // Fallback: try regular getDoc
+      // getDoc: uses cache when offline, hits server when online — never throws on connectivity
       try{
         const snap = await getDoc(docRef);
         if(snap.exists()){
-          const data = snap.data() || {};
-          const profile = normalizeProfile(data.profile || {});
+          const profile = normalizeProfile((snap.data() || {}).profile || {});
           if(profile.name){
-            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
+            localStorage.setItem(lsKey, JSON.stringify(profile));
+            // fire-and-forget server refresh so next load is always fresh
+            getDocFromServer(docRef).then(s2 => {
+              if(s2.exists()){
+                const p2 = normalizeProfile((s2.data() || {}).profile || {});
+                if(p2.name) localStorage.setItem(lsKey, JSON.stringify(p2));
+              }
+            }).catch(()=>{});
             return profile;
           }
         }
       }catch(e){
-        console.warn('loadUserProfile getDoc failed', e);
+        console.warn('loadUserProfile getDoc failed:', e.code || e.message);
       }
-      
-      // Fallback: try cache
-      try{
-        if(typeof getDocFromCache === 'function'){
-          const cacheSnap = await getDocFromCache(docRef);
-          if(cacheSnap && cacheSnap.exists()){
-            const data2 = cacheSnap.data() || {};
-            const profile2 = normalizeProfile(data2.profile || {});
-            if(profile2.name){
-              console.debug('DEBUG: loadUserProfile - returned from cache for uid=', uid);
-              localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile2));
-              return profile2;
-            }
-          }
-        }
-      }catch(e){ console.warn('loadUserProfile cache fallback failed', e); }
     }
-    
-    // Final fallback: read from localStorage only
-    const raw = localStorage.getItem(getProfileStorageKey(uid));
-    if(!raw) return null;
-    const parsed = JSON.parse(raw);
-    const profile = normalizeProfile(parsed || {});
-    if(!profile.name) return null;
-    return profile;
+
+    // Firestore failed or returned no profile — fall back to localStorage
+    return localProfile;
   }catch(e){ console.warn('loadUserProfile', e); return null; }
 }
 
@@ -566,29 +544,39 @@ async function loadTasksForUser(uid){
     }
 
     // ── Firestore fetch ──────────────────────────────────────────
+    // Strategy: getDocs() first — it uses local cache instantly if offline and hits
+    // the server when online. Then try getDocsFromServer() in the background to
+    // refresh with authoritative data (important for cross-device sync).
     let remote = null;
     let firestoreOk = false;
     if(window.db && uid){
       const col = getUserCollection('tasks');
       if(col){
-        // Try server-first (mandatory for anon/cross-device — bypasses local cache)
+        // Step 1: getDocs — works offline (cache) AND online (server), never throws on connectivity
         try{
-          console.log('[loadTasksForUser] fetching from Firestore server…');
-          const snap = await getDocsFromServer(col);
+          console.log('[loadTasksForUser] getDocs (cache-or-server)…');
+          const snap = await getDocs(col);
           remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
           firestoreOk = true;
-          console.log('[loadTasksForUser] Firestore server OK — docs:', remote.length);
-        }catch(serverErr){
-          console.warn('[loadTasksForUser] getDocsFromServer failed:', serverErr.code || serverErr.message);
-          // Fallback: cached read (works offline)
-          try{
-            const snap = await getDocs(col);
-            remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            firestoreOk = true;
-            console.log('[loadTasksForUser] Firestore cache fallback OK — docs:', remote.length);
-          }catch(cacheErr){
-            console.warn('[loadTasksForUser] getDocs cache fallback failed:', cacheErr.code || cacheErr.message);
-          }
+          console.log('[loadTasksForUser] getDocs OK — docs:', remote.length,
+            snap.metadata.fromCache ? '(from cache)' : '(from server)');
+        }catch(e){
+          console.warn('[loadTasksForUser] getDocs failed:', e.code || e.message);
+        }
+
+        // Step 2: if getDocs returned from cache (offline/stale), also fire a server request
+        // to get fresh data — render immediately with cache, then re-render when server responds
+        if(firestoreOk){
+          // always attempt server refresh — non-blocking, re-renders when it resolves
+          getDocsFromServer(col).then(snap2 => {
+            const fresh = snap2.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+            console.log('[loadTasksForUser] server refresh — docs:', fresh.length);
+            tasks = fresh;
+            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+          }).catch(e=>{
+            console.warn('[loadTasksForUser] server refresh failed (staying with cached data):', e.code || e.message);
+          });
         }
       }
     }
@@ -597,24 +585,23 @@ async function loadTasksForUser(uid){
       '| remote:', remote ? remote.length : 'null',
       '| local:', Array.isArray(local) ? local.length : 'null');
 
-    // Firestore is the source of truth when reachable (even if 0 tasks — account may be empty)
     if(firestoreOk){
       tasks = Array.isArray(remote) ? remote : [];
       try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      // if Firestore returned 0 but we have local tasks, push them up (first-time sync / migration)
+      // Firestore returned 0 but localStorage has tasks → first-time sync / migration
       if(!tasks.length && Array.isArray(local) && local.length){
-        console.log('[loadTasksForUser] Firestore empty but local has tasks — syncing up', local.length, 'tasks');
+        console.log('[loadTasksForUser] Firestore empty, syncing', local.length, 'local tasks up');
         tasks = local;
         computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-        if(window.db) saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync local→firestore failed', e));
+        if(window.db) saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
       }
       return;
     }
 
-    // Firestore unreachable — use localStorage
+    // Firestore completely unreachable — use localStorage
     if(Array.isArray(local) && local.length){
-      console.log('[loadTasksForUser] using localStorage fallback —', local.length, 'tasks');
+      console.log('[loadTasksForUser] Firestore unreachable, using localStorage —', local.length, 'tasks');
       tasks = local;
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
       return;
@@ -2181,31 +2168,37 @@ window.triggerImportAny = triggerImportAny;
 async function saveToFirebase(tasksList){
   try{
     if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase save');
+      console.warn('saveToFirebase: not authenticated, skipping');
       return;
     }
+    const uid = window.auth.currentUser.uid;
     const col = getUserCollection('tasks');
     if (!col) return;
-    const existing = await getDocs(col);
+
+    // Always write localStorage first so a network failure never loses data
+    try{
+      const lsKey = uid + '_agenda_tasks';
+      localStorage.setItem(lsKey, JSON.stringify(tasksList));
+    }catch(e){}
+
     const batch = writeBatch(window.db);
-    // delete existing docs
-    for(const d of existing.docs){
-      batch.delete(d.ref);
-    }
-    // add new docs with generated ids
+    // Read existing docs to know which to delete — use cache so this works offline too
+    let existingDocs = [];
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){ console.warn('saveToFirebase: getDocs for delete failed', e.code || e.message); }
+    for(const d of existingDocs) batch.delete(d.ref);
+
     for(const t of tasksList){
       const data = Object.assign({}, t);
-      if(data._id) delete data._id;
+      delete data._id;
       if(t._id){
-        const ref = doc(window.db, 'users', window.auth.currentUser.uid, 'tasks', t._id);
-        batch.set(ref, data);
+        batch.set(doc(window.db, 'users', uid, 'tasks', t._id), data);
       } else {
-        const newRef = doc(col);
-        batch.set(newRef, data);
+        batch.set(doc(col), data);
       }
     }
     await batch.commit();
-  }catch(e){ console.error('saveToFirebase', e); }
+    console.log('[saveToFirebase] committed', tasksList.length, 'tasks');
+  }catch(e){ console.error('[saveToFirebase] failed:', e.code || e.message); }
 }
 
 // save an arbitrary event (non-blocking)
