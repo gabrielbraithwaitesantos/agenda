@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, getDoc, getDocFromCache, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDocsFromServer, getDoc, getDocFromCache, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -18,38 +18,29 @@ function getUserLocalStorageKey(key) {
   return `${window.auth.currentUser.uid}_${key}`;
 }
 
+function getTimerStorageKey() {
+  return getUserLocalStorageKey('agenda_timer');
+}
+
+function getAggregatesStorageKey() {
+  return getUserLocalStorageKey('agenda_aggregates');
+}
+
 // basic calendar/runtime globals
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 let tasks = [];
-try{ tasks = JSON.parse(localStorage.getItem('agenda_tasks')||'[]') || []; }catch(e){ tasks = []; }
-
-// migrate existing tasks: if a task is marked onlyExam and its name looks like the day-of-exam, mark onlyExamDay
-try{
-  let migrated = false;
-  for(const t of tasks){
-    if(t && t.onlyExam && !t.onlyExamDay){
-      try{
-        const n = (t.name||'').toLowerCase();
-        if(/\bdia\b|dia da prova|dia\s+da/i.test(n) || /\bdia\s+\d{1,2}\b/.test(n)){
-          t.onlyExamDay = true; migrated = true;
-        }
-      }catch(e){}
-    }
-  }
-  if(migrated) try{ localStorage.setItem('agenda_tasks', JSON.stringify(tasks)); }catch(e){}
-}catch(e){/* ignore migration errors */}
+// tasks are NOT loaded from localStorage at startup — they are loaded after auth in handleAuthStateChange
 
 let vm = (new Date()).getMonth();
 let vy = (new Date()).getFullYear();
 
 function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
-// timer state (tracks currently active timed task)
+// timer state (tracks currently active timed task) — loaded per-user after auth
 let activeTimer = null;
 let timerInterval = null;
-try{ activeTimer = JSON.parse(localStorage.getItem('agenda_timer')||'null'); }catch(e){ activeTimer = null; }
 
 // staged attachments waiting for user Send (not yet persisted to localStorage/Firestore)
 let pendingAttachments = [];
@@ -555,20 +546,51 @@ async function loadTasksForUser(uid){
   try{
     // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
+    activeTimer = null;
+    // Load this user's timer state
+    try{ activeTimer = JSON.parse(localStorage.getItem(uid + '_agenda_timer') || 'null'); }catch(e){ activeTimer = null; }
+    // Load this user's aggregates for immediate UI render
+    try{ const ex = JSON.parse(localStorage.getItem(uid + '_agenda_aggregates') || 'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
     try{ console.debug('DEBUG: loadTasksForUser start uid=', uid); }catch(e){}
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
+    // migrate legacy tasks stored without uid prefix (one-time migration)
+    if(uid && (!Array.isArray(local) || !local.length)){
+      try{
+        const legacy = JSON.parse(localStorage.getItem('agenda_tasks') || 'null');
+        if(Array.isArray(legacy) && legacy.length){
+          local = legacy;
+          localStorage.setItem(key, JSON.stringify(legacy));
+          localStorage.removeItem('agenda_tasks');
+          console.log('migrated legacy agenda_tasks to uid-scoped key');
+        }
+      }catch(e){ console.warn('legacy tasks migration failed', e); }
+    }
 
     let remote = null;
     if(window.db && uid){
       try{
         const col = getUserCollection('tasks');
         if(col){
-          const snap = await getDocs(col);
-          const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-          try{ console.debug('DEBUG: loadTasksForUser firestore read docs=', arr.length); }catch(e){}
-          if(Array.isArray(arr)) remote = arr;
+          let snap = null;
+          try{
+            snap = await getDocsFromServer(col);
+            try{ console.debug('DEBUG: loadTasksForUser server docs=', snap.docs.length); }catch(e){}
+          }catch(serverErr){
+            console.warn('loadTasksForUser getDocsFromServer failed', serverErr);
+            try{
+              snap = await getDocs(col);
+              try{ console.debug('DEBUG: loadTasksForUser fallback getDocs docs=', snap.docs.length); }catch(e){}
+            }catch(fallbackErr){
+              console.warn('loadTasksForUser getDocs fallback failed', fallbackErr);
+            }
+          }
+          if(snap){
+            const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+            try{ console.debug('DEBUG: loadTasksForUser firestore read docs=', arr.length); }catch(e){}
+            if(Array.isArray(arr)) remote = arr;
+          }
         }
       }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
     }
@@ -585,6 +607,8 @@ async function loadTasksForUser(uid){
     if(Array.isArray(local) && local.length){
       tasks = local;
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      // push local-only tasks up to Firestore (covers migration from localStorage-only usage)
+      if(window.db) saveToFirebase(tasks).catch(e=>console.warn('initial sync local→firestore', e));
       return;
     }
 
@@ -872,7 +896,7 @@ function computeAggregates(){
   const nameAgg = {};
   for(const k of Object.keys(nameStats)) nameAgg[k] = { avg: Math.round((nameStats[k].sum/nameStats[k].count)||0), n: nameStats[k].count, sample: nameStats[k].sample };
   const agg = { byCategory: catAgg, byName: nameAgg, computedAt: new Date().toISOString() };
-  localStorage.setItem('agenda_aggregates', JSON.stringify(agg));
+  localStorage.setItem(getAggregatesStorageKey(), JSON.stringify(agg));
   renderAggregatesUI(agg);
   return agg;
 }
@@ -896,8 +920,7 @@ function renderAggregatesUI(agg){
   container.innerHTML = html;
 }
 
-// try load existing aggregates on init
-try{ const ex = JSON.parse(localStorage.getItem('agenda_aggregates')||'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
+// aggregates are loaded per-user after auth in loadTasksForUser
 
 // ── CRUD manual, export/import ───────────────────────────────────
 function createTask(){
@@ -1293,7 +1316,7 @@ function renderTasks(){
     if(activeTimer && ((activeTimer.id && tasks.findIndex(t=>t && t._id===activeTimer.id)!==i) || (!activeTimer.id && activeTimer.index!==i)) ) stopTimer();
     const id = tasks[i] && tasks[i]._id ? tasks[i]._id : null;
     activeTimer = { index: i, id, start: new Date().toISOString() };
-    localStorage.setItem('agenda_timer', JSON.stringify(activeTimer));
+    localStorage.setItem(getTimerStorageKey(), JSON.stringify(activeTimer));
     startTimerInterval();
     renderTasks(); renderCal();
   }
@@ -1307,14 +1330,14 @@ function renderTasks(){
       i = tasks.findIndex(x=>x && x._id === activeTimer.id);
       if(i !== -1) t = tasks[i];
     }
-    if(!t){ activeTimer = null; localStorage.removeItem('agenda_timer'); return; }
+    if(!t){ activeTimer = null; localStorage.removeItem(getTimerStorageKey()); return; }
     const start = new Date(activeTimer.start);
     const mins = Math.max(1, Math.round((Date.now() - start.getTime())/60000));
     t.actualDuration = (Number(t.actualDuration) || 0) + mins;
     delete t.timerStart;
     saveTasks();
     try{ saveEventAndLearning('task.timed', { taskId: t._id||null, name: t.name, minutes: mins }); }catch(e){}
-    activeTimer = null; localStorage.removeItem('agenda_timer');
+    activeTimer = null; localStorage.removeItem(getTimerStorageKey());
     if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
     renderTasks(); renderCal();
   }
@@ -1436,11 +1459,12 @@ async function uploadPendingAttachment(att, persist = true){
             try{ saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr).catch(e=>console.warn('saveAttachmentRecord failed', e)); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
             try{
               const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
-              const curRaw = localStorage.getItem('agenda_attachments');
+              const _attKey = getAttachmentsStorageKey();
+              const curRaw = localStorage.getItem(_attKey);
               let cur = [];
               try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
               cur.unshift(rec);
-              localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+              localStorage.setItem(_attKey, JSON.stringify(cur));
               try{ renderAttachmentsPanel(); }catch(e){}
               try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
               // remove pending marker from preview since it's now persisted
@@ -1484,11 +1508,12 @@ async function uploadPendingAttachment(att, persist = true){
                 try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
                 try{
                   const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                  const curRaw = localStorage.getItem('agenda_attachments');
+                  const _attKey2 = getAttachmentsStorageKey();
+                  const curRaw = localStorage.getItem(_attKey2);
                   let cur = [];
                   try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
                   cur.unshift(rec);
-                  localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                  localStorage.setItem(_attKey2, JSON.stringify(cur));
                   try{ renderAttachmentsPanel(); }catch(e){}
                   try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                   // remove pending marker from preview since it's now persisted
@@ -1531,11 +1556,12 @@ async function uploadPendingAttachment(att, persist = true){
               try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
               try{
                 const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                const curRaw = localStorage.getItem('agenda_attachments');
+                const _attKey3 = getAttachmentsStorageKey();
+                const curRaw = localStorage.getItem(_attKey3);
                 let cur = [];
                 try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
                 cur.unshift(rec);
-                localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                localStorage.setItem(_attKey3, JSON.stringify(cur));
                 try{ renderAttachmentsPanel(); }catch(e){}
                 try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                 // remove pending marker from preview since it's now persisted
@@ -2306,7 +2332,14 @@ async function loadFromFirebase(){
     try{ console.debug('DEBUG: loadFromFirebase start uid=', window.auth.currentUser && window.auth.currentUser.uid); }catch(e){}
     const col   = getUserCollection('tasks');
     if (!col) return;
-    const snap  = await getDocs(col);
+    let snap = null;
+    try{
+      snap = await getDocsFromServer(col);
+      try{ console.debug('DEBUG: loadFromFirebase server docs=', snap.docs.length); }catch(e){}
+    }catch(serverErr){
+      console.warn('loadFromFirebase getDocsFromServer failed', serverErr);
+      snap = await getDocs(col);
+    }
     // preserve Firestore id in _id so we can sync edits/deletes later
     tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
     try{ console.debug('DEBUG: loadFromFirebase loaded tasks=', tasks && tasks.length); }catch(e){}
@@ -2450,7 +2483,7 @@ try{
     if(!confirm('Limpar histórico local (durações e agregados)?')) return;
     // remove completion metadata from tasks
     tasks = tasks.map(t=>{ const copy = Object.assign({}, t); delete copy.actualDuration; delete copy.completedAt; return copy; });
-    localStorage.removeItem('agenda_aggregates');
+    localStorage.removeItem(getAggregatesStorageKey());
     saveTasks(); renderCal(); renderTasks();
     alert('Histórico local limpo.');
   }); }
@@ -2505,8 +2538,9 @@ window.performLogout = async function(){
     tasks = [];
     history = [];
     pendingAttachments = [];
-    localStorage.removeItem('agenda_timer');
-    localStorage.removeItem('agenda_aggregates');
+    activeTimer = null;
+    localStorage.removeItem(getTimerStorageKey());
+    localStorage.removeItem(getAggregatesStorageKey());
 
     // hide logout modal if open
     try{ const modal = document.getElementById('logout-modal'); if(modal) modal.classList.add('hidden'); }catch(e){}
