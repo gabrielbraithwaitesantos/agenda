@@ -7,32 +7,6 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
 
-<style>
-  /* Auth tab content visibility */
-  .auth-tab-content { display: none; }
-  .auth-tab-content.active { display: block; }
-
-  /* Auth container visibility */
-  #auth-container { display: none; }
-  #auth-container.show { display: flex; }
-
-  /* Responsive auth card */
-  #auth-card {
-    max-height: 90vh;
-    overflow-y: auto;
-  }
-
-  @media (max-width: 600px) {
-    #auth-card {
-      padding: 24px 16px !important;
-      max-width: 100% !important;
-    }
-    #auth-card h1 {
-      font-size: 24px !important;
-    }
-  }
-</style>
-
 <script type="module">
   // ── GROQ ──────────────────────────────────────────────
   const GROQ_API_KEY = "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";
@@ -42,7 +16,6 @@
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
   import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
-  import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyC0SYMMsDrdKrT7y2Dqat47ShFvaamPZE0",
@@ -54,194 +27,14 @@
     measurementId: "G-CV2BKY24KN"
   };
   const app = initializeApp(firebaseConfig);
-  const db  = getFirestore(app); // memory cache — getDocs always goes to server, works in anon tabs
+  const db  = getFirestore(app);
   const storage = getStorage(app);
-
-  const auth = getAuth(app);
-  window.auth = auth;
-
-  function syncSetupBannerVisibility() {
-    const banner = document.getElementById('setup-banner');
-    if(!banner) return;
-    const key = (GROQ_API_KEY || '').trim();
-    if(key && key !== 'COLE_SUA_CHAVE_GROQ_AQUI') {
-      banner.classList.add('hidden');
-    } else {
-      banner.classList.remove('hidden');
-    }
-  }
-  window.syncSetupBannerVisibility = syncSetupBannerVisibility;
-  window.addEventListener('DOMContentLoaded', ()=>{ setTimeout(syncSetupBannerVisibility, 0); });
-
-  try {
-    await setPersistence(auth, browserLocalPersistence);
-  } catch (e) {
-    console.warn('Auth persistence setup failed', e);
-  }
-
-  // Check authentication state and show/hide auth UI
-  onAuthStateChanged(auth, (user) => {
-    if (!user) {
-      // Not authenticated - show auth container
-      console.log('User not authenticated, showing auth UI');
-      const authContainer = document.getElementById('auth-container');
-      const appElement = document.querySelector('.app');
-      if(authContainer) {
-        authContainer.classList.add('show');
-        authContainer.style.display = 'flex';
-      }
-      if(appElement) appElement.style.display = 'none';
-      const setupBanner = document.getElementById('setup-banner');
-      if(setupBanner) setupBanner.style.display = 'none';
-      const bottom = document.getElementById('bottom-ia-bar');
-      if(bottom) bottom.style.display = 'none';
-      try{ if(window.handleAuthStateChange) window.handleAuthStateChange(null); }catch(e){}
-      return;
-    }
-
-    // User authenticated - show app, hide auth
-    console.log('User authenticated:', user.email);
-    const authContainer = document.getElementById('auth-container');
-    const appElement = document.querySelector('.app');
-    if(authContainer) {
-      authContainer.classList.remove('show');
-      authContainer.style.display = 'none';
-    }
-    if(appElement) appElement.style.display = 'grid';
-    const bottom = document.getElementById('bottom-ia-bar');
-    if(bottom) bottom.style.display = 'block';
-
-    const el = document.getElementById('firebase-debug');
-    if(el){
-      el.textContent = `Firebase auth: ${user.email} (uid=${user.uid})`;
-    }
-    // let app.js load user-specific tasks and state
-    try{ if(window.handleAuthStateChange) window.handleAuthStateChange(user); }catch(e){ console.warn('handleAuthStateChange call failed', e); }
-  });
   // expose to non-module scripts
   window.GROQ_API_KEY = GROQ_API_KEY;
   window.GROQ_MODEL = GROQ_MODEL;
   window.db = db;
   window.storage = storage;
   window.firebaseApp = app;
-  window.signOut = signOut;
-
-  // Auth tab switching
-  window.switchAuthTab = function(tab) {
-    document.querySelectorAll('.auth-tab-content').forEach(el => el.classList.remove('active'));
-    document.querySelectorAll('.auth-tab-btn').forEach(el => {
-      el.classList.remove('active');
-      el.style.borderBottomColor = 'transparent';
-      el.style.color = '#9a99a3';
-    });
-    document.getElementById('auth-' + tab + '-tab').classList.add('active');
-    const btn = document.querySelector(`[onclick="switchAuthTab('${tab}')"]`);
-    if(btn) {
-      btn.classList.add('active');
-      btn.style.borderBottomColor = '#4f8ef7';
-      btn.style.color = '#4f8ef7';
-    }
-    document.getElementById('auth-' + tab + '-message').style.display = 'none';
-  };
-
-  // Show auth message
-  function showAuthMessage(type, message, tab) {
-    const msgEl = document.getElementById('auth-' + tab + '-message');
-    msgEl.textContent = message;
-    msgEl.style.display = 'block';
-    msgEl.className = 'auth-message ' + type;
-    if(type === 'error') {
-      msgEl.style.background = 'rgba(245,99,66,0.1)';
-      msgEl.style.border = '1px solid rgba(245,99,66,0.3)';
-      msgEl.style.color = '#ff6b5b';
-    } else {
-      msgEl.style.background = 'rgba(62,207,142,0.1)';
-      msgEl.style.border = '1px solid rgba(62,207,142,0.3)';
-      msgEl.style.color = '#4ed895';
-    }
-  }
-
-  // Login handler
-  window.handleAuthLogin = async function() {
-    const email = document.getElementById('auth-login-email').value;
-    const password = document.getElementById('auth-login-password').value;
-    const btn = document.getElementById('auth-login-btn');
-
-    if(!email || !password) {
-      showAuthMessage('error', 'Preencha todos os campos', 'login');
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Entrando...';
-
-    try {
-      await signInWithEmailAndPassword(auth, email, password);
-      showAuthMessage('success', 'Login realizado!', 'login');
-    } catch (error) {
-      let errorMsg = 'Erro ao fazer login';
-      if (error.code === 'auth/user-not-found') {
-        errorMsg = 'Email não cadastrado';
-      } else if (error.code === 'auth/wrong-password') {
-        errorMsg = 'Senha incorreta';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMsg = 'Email inválido';
-      } else if (error.code === 'auth/too-many-requests') {
-        errorMsg = 'Muitas tentativas. Tente mais tarde.';
-      }
-      showAuthMessage('error', errorMsg, 'login');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Entrar';
-    }
-  };
-
-  // Signup handler
-  window.handleAuthSignup = async function() {
-    const email = document.getElementById('auth-signup-email').value;
-    const password = document.getElementById('auth-signup-password').value;
-    const confirmPassword = document.getElementById('auth-signup-password-confirm').value;
-    const btn = document.getElementById('auth-signup-btn');
-
-    if(!email || !password || !confirmPassword) {
-      showAuthMessage('error', 'Preencha todos os campos', 'signup');
-      return;
-    }
-
-    if (password !== confirmPassword) {
-      showAuthMessage('error', 'As senhas não correspondem', 'signup');
-      return;
-    }
-
-    if (password.length < 6) {
-      showAuthMessage('error', 'Senha deve ter pelo menos 6 caracteres', 'signup');
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = 'Criando...';
-
-    try {
-      await createUserWithEmailAndPassword(auth, email, password);
-      showAuthMessage('success', 'Conta criada!', 'signup');
-    } catch (error) {
-      let errorMsg = 'Erro ao criar conta';
-      if (error.code === 'auth/email-already-in-use') {
-        errorMsg = 'Este email já está cadastrado';
-      } else if (error.code === 'auth/weak-password') {
-        errorMsg = 'Senha muito fraca';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMsg = 'Email inválido';
-      } else if (error.code === 'auth/operation-not-allowed') {
-        errorMsg = 'Cadastro não está disponível no momento';
-      }
-      showAuthMessage('error', errorMsg, 'signup');
-    } finally {
-      btn.disabled = false;
-      btn.textContent = 'Criar Conta';
-    }
-  };
-
 </script>
 
 </head>
@@ -263,71 +56,13 @@
   </span>
 </div>
 
-<!-- Firebase debug (auth / bucket) -->
-<div id="firebase-debug" style="position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.6);color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;z-index:9999">Firebase auth: inicializando…</div>
-
-<!-- AUTH CONTAINER (shown when not authenticated) -->
-<div id="auth-container" style="position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#080808,#0a0a0b);align-items:center;justify-content:center;z-index:9998;padding:20px;flex-direction:column">
-  <div id="auth-card" style="width:100%;max-width:420px;background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border:1px solid rgba(0,0,0,0.18);border-radius:16px;padding:40px;box-shadow:0 8px 30px rgba(2,6,20,0.7),0 0 14px rgba(79,142,247,0.18),inset 0 0 12px rgba(79,142,247,0.06)">
-    <div style="text-align:center;margin-bottom:32px">
-      <div style="font-size:48px;margin-bottom:16px">📋</div>
-      <h1 style="font-size:28px;font-weight:500;margin-bottom:8px">Agenda IA</h1>
-      <p style="color:#9a99a3;font-size:14px">Organize sua vida com IA</p>
-    </div>
-
-    <div style="display:flex;gap:0;margin-bottom:24px;border-bottom:1px solid #1b1c1e">
-      <button class="auth-tab-btn active" onclick="switchAuthTab('login')" style="flex:1;padding:12px 16px;background:transparent;border:none;color:#4f8ef7;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid #4f8ef7;transition:all 0.2s ease">Login</button>
-      <button class="auth-tab-btn" onclick="switchAuthTab('signup')" style="flex:1;padding:12px 16px;background:transparent;border:none;color:#9a99a3;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s ease">Cadastro</button>
-    </div>
-
-    <!-- LOGIN TAB -->
-    <div class="auth-tab-content active" id="auth-login-tab">
-      <div class="auth-message" id="auth-login-message" style="padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:16px;display:none"></div>
-      <div style="margin-bottom:16px">
-        <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#ececec">Email</label>
-        <input type="email" id="auth-login-email" placeholder="seu@email.com" style="width:100%;padding:10px 14px;background:#0f1113;border:1px solid #1b1c1e;border-radius:10px;color:#ececec;font-family:'DM Sans',sans-serif;font-size:14px;transition:all 0.2s ease" required>
-      </div>
-      <div style="margin-bottom:16px">
-        <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#ececec">Senha</label>
-        <input type="password" id="auth-login-password" placeholder="••••••••" style="width:100%;padding:10px 14px;background:#0f1113;border:1px solid #1b1c1e;border-radius:10px;color:#ececec;font-family:'DM Sans',sans-serif;font-size:14px;transition:all 0.2s ease" required>
-        <div style="font-size:12px;color:#9a99a3;margin-top:4px">Mínimo 6 caracteres</div>
-      </div>
-      <button onclick="handleAuthLogin()" id="auth-login-btn" style="width:100%;padding:12px 16px;background:linear-gradient(135deg,#4f8ef7,#2b63d6);border:none;border-radius:10px;color:white;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s ease;box-shadow:0 4px 12px rgba(79,142,247,0.25)">Entrar</button>
-    </div>
-
-    <!-- SIGNUP TAB -->
-    <div class="auth-tab-content" id="auth-signup-tab">
-      <div class="auth-message" id="auth-signup-message" style="padding:10px 12px;border-radius:10px;font-size:13px;margin-bottom:16px;display:none"></div>
-      <div style="margin-bottom:16px">
-        <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#ececec">Email</label>
-        <input type="email" id="auth-signup-email" placeholder="seu@email.com" style="width:100%;padding:10px 14px;background:#0f1113;border:1px solid #1b1c1e;border-radius:10px;color:#ececec;font-family:'DM Sans',sans-serif;font-size:14px;transition:all 0.2s ease" required>
-        <div style="font-size:12px;color:#9a99a3;margin-top:4px">Será usado para acessar sua conta</div>
-      </div>
-      <div style="margin-bottom:16px">
-        <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#ececec">Senha</label>
-        <input type="password" id="auth-signup-password" placeholder="••••••••" style="width:100%;padding:10px 14px;background:#0f1113;border:1px solid #1b1c1e;border-radius:10px;color:#ececec;font-family:'DM Sans',sans-serif;font-size:14px;transition:all 0.2s ease" required>
-        <div style="font-size:12px;color:#9a99a3;margin-top:4px">Mínimo 6 caracteres</div>
-      </div>
-      <div style="margin-bottom:16px">
-        <label style="display:block;margin-bottom:6px;font-size:13px;font-weight:500;color:#ececec">Confirmar Senha</label>
-        <input type="password" id="auth-signup-password-confirm" placeholder="••••••••" style="width:100%;padding:10px 14px;background:#0f1113;border:1px solid #1b1c1e;border-radius:10px;color:#ececec;font-family:'DM Sans',sans-serif;font-size:14px;transition:all 0.2s ease" required>
-      </div>
-      <button onclick="handleAuthSignup()" id="auth-signup-btn" style="width:100%;padding:12px 16px;background:linear-gradient(135deg,#4f8ef7,#2b63d6);border:none;border-radius:10px;color:white;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:500;cursor:pointer;transition:all 0.2s ease;box-shadow:0 4px 12px rgba(79,142,247,0.25)">Criar Conta</button>
-    </div>
-
-    <div style="text-align:center;font-size:12px;color:#9a99a3;margin-top:20px">
-      <p>🔒 Seus dados estão seguros com Firebase</p>
-    </div>
-  </div>
-</div>
-
 <!-- SPLASH (aparece ao entrar) -->
 <div id="splash" class="splash-overlay">
   <div class="splash-card">
     <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
     <div class="splash-header">
       <div class="logo">💬</div>
-      <h2 id="splash-greeting">Bem-vindo moreno</h2>
+      <h2>Bem-vindo Moreno</h2>
     </div>
     <div class="splash-body">
       <div class="splash-msg">O que temos pra hoje?</div>
@@ -336,87 +71,8 @@
       <div id="splash-replies" class="splash-replies"></div>
     </div>
     <div class="splash-actions">
-      <button type="button" class="cal-nav splash-attach" id="splash-attach-btn" aria-label="Anexar arquivo" onclick="triggerImportAny()">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2.5 2.5 0 0 1-3.54-3.54l7.07-7.07" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>Anexar</span>
-      </button>
-      <button class="cal-nav" id="splash-account-btn" onclick="openAccountPanel()">Minha conta</button>
       <button class="cal-nav" id="splash-send-btn">Enviar</button>
     </div>
-  </div>
-</div>
-
-<!-- PROFILE GATE (aparece antes do splash quando o usuário entra pela primeira vez) -->
-
-<div id="profile-modal" class="hidden">
-  <div class="modal-card profile-card">
-    <h3>Como eu devo te chamar?</h3>
-    <div style="color:var(--muted);font-size:13px;margin-bottom:12px">Preencha seu nome para eu te cumprimentar no splash.</div>
-    <div id="profile-account-info" class="profile-account-info"></div>
-    <div class="profile-field">
-      <label for="profile-name">Nome</label>
-      <input id="profile-name" type="text" placeholder="Ex: Gabriel" oninput="syncProfilePreview()">
-      <div id="profile-live-example" class="profile-live-example"></div>
-    </div>
-    <div class="profile-field">
-      <label for="profile-gender">Saudação</label>
-      <select id="profile-gender" onchange="syncProfilePreview()">
-        <option value="masc">Masculino — Bem-vindo moreno</option>
-        <option value="fem">Feminino — Bem-vinda morena</option>
-      </select>
-    </div>
-    <div id="profile-preview" class="profile-preview">Bem-vindo moreno</div>
-    <div id="profile-message" class="profile-message"></div>
-    <div class="modal-actions">
-      <button type="button" class="cal-nav" id="profile-save-btn" onclick="saveWelcomeProfile()">Salvar</button>
-    </div>
-  </div>
-</div>
-
-<!-- MODAL DE EDIÇÃO DE TAREFA -->
-<div id="edit-task-modal" class="hidden">
-  <div class="modal-card">
-    <h3>Editar tarefa</h3>
-    <form id="edit-task-form">
-      <div class="profile-field">
-        <label for="edit-task-name">Nome</label>
-        <input id="edit-task-name" name="name" type="text" required>
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-date">Data</label>
-        <input id="edit-task-date" name="date" type="date" required>
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-time">Hora</label>
-        <input id="edit-task-time" name="time" type="time">
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-cat">Categoria</label>
-        <select id="edit-task-cat" name="cat">
-          <option value="trabalho">Trabalho</option>
-          <option value="estudo">Estudo</option>
-          <option value="pessoal">Pessoal</option>
-          <option value="projeto">Projeto</option>
-          <option value="outro">Outro</option>
-        </select>
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-est">Estimativa (min)</label>
-        <input id="edit-task-est" name="est" type="number" min="1" step="1">
-      </div>
-      <div class="profile-field">
-        <label>Anexos</label>
-        <div id="edit-task-attachments"></div>
-        <input id="edit-task-add-attachment" type="file" style="margin-top:8px">
-      </div>
-      <div id="edit-task-message" class="profile-message"></div>
-      <div class="modal-actions">
-        <button type="button" class="cal-nav" id="edit-task-cancel-btn">Cancelar</button>
-        <button type="submit" class="cal-nav">Salvar</button>
-      </div>
-    </form>
   </div>
 </div>
 
@@ -448,11 +104,7 @@
 
     <!-- toolbar -->
     <div style="display:flex;gap:8px;align-items:center;padding:6px 0 12px;">
-      <button type="button" class="cal-nav" onclick="exportPDF()">Exportar PDF</button>
-      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
-        <button type="button" class="cal-nav" onclick="openAccountPanel()">Minha conta</button>
-        <button type="button" class="cal-nav" onclick="handleLogout()">Sair</button>
-      </div>
+      <button class="cal-nav" onclick="exportPDF()">Exportar PDF</button>
     </div>
 
     <div>
@@ -489,30 +141,10 @@
       </div>
     </div>
 
-    <div style="margin-top:12px">
-      <div class="section-title">Provas</div>
-      <div id="exam-task-list" style="display:flex;flex-direction:column;gap:7px;">
-        <div class="no-tasks">Nenhuma tarefa de prova</div>
-      </div>
-    </div>
-
-    <div style="margin-top:12px">
-      <div class="section-title">Trabalhos</div>
-      <div id="work-task-list" style="display:flex;flex-direction:column;gap:7px;">
-        <div class="no-tasks">Nenhuma tarefa de trabalho</div>
-      </div>
-    </div>
-
-    <div style="margin-top:12px">
-      <div class="section-title">anexos</div>
-      <div id="attachments-panel" style="display:flex;flex-direction:column;gap:8px;">
-        <div id="attachments-list" style="display:flex;flex-direction:column;gap:6px;">
-          <div class="no-tasks">Nenhum anexo ainda</div>
-        </div>
-        <div style="display:flex;gap:8px;margin-top:6px">
-          <button id="reconcile-attachments-btn" class="cal-nav small">Salvar anexos</button>
-          <div id="reconcile-status" style="color:var(--muted);font-size:12px;align-self:center"></div>
-        </div>
+    <div>
+      <div class="section-title">anexos recentes</div>
+      <div id="attachments-list" class="attachments-list">
+        <div class="no-tasks">Nenhum anexo ainda</div>
       </div>
     </div>
 
@@ -541,8 +173,6 @@
 </div>
 
 <script type="module" src="app.js"></script>
-<!-- Tesseract.js for optional client-side OCR of image attachments -->
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
 <!-- date popover -->
 <div id="date-popover" class="hidden date-popover-backdrop">
   <div class="popover-card">
@@ -570,17 +200,6 @@
     <div class="modal-actions">
       <button class="cal-nav" id="complete-cancel-btn">Cancelar</button>
       <button class="cal-nav" id="complete-confirm-btn">Confirmar</button>
-    </div>
-  </div>
-</div>
-<!-- logout modal (replace native confirm) -->
-<div id="logout-modal" class="hidden">
-  <div class="modal-card">
-    <h3>Tem certeza que deseja sair?</h3>
-    <div style="color:var(--muted);margin-top:8px">Suas tarefas serão salvas nesta conta e reaparecerão quando você entrar novamente nesta conta.</div>
-    <div class="modal-actions">
-      <button type="button" class="cal-nav" id="logout-cancel-btn" onclick="document.getElementById('logout-modal').classList.add('hidden')">Cancelar</button>
-      <button type="button" class="cal-nav" id="logout-confirm-btn" onclick="window.performLogout()">Sair</button>
     </div>
   </div>
 </div>
