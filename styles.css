@@ -267,10 +267,181 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+/* ── toolbar ── */
+.app-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0 12px;
+  flex-wrap: wrap;
+}
+.toolbar-right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* ── responsive ── */
+
+/* Tablet (≤ 900px) */
+@media (max-width: 900px) {
+  body { padding: 20px 10px 100px; }
+
+  .app {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+    gap: 14px;
+  }
+
+  .app.single-column {
+    width: calc(100% - 20px);
+  }
+
+  .app > .chat-col { order: 2; }
+  .app > .right-col { order: 1; }
+
+  .right-col {
+    padding: 14px;
+  }
+}
+
+/* Mobile (≤ 600px) */
 @media (max-width: 600px) {
-  .app { grid-template-columns: 1fr; }
-  .right-col { display: none; }
+  body {
+    padding: 12px 8px 110px;
+    font-size: 14px;
+  }
+
+  #setup-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .app,
+  .app.single-column {
+    width: 100%;
+    gap: 10px;
+  }
+
+  .right-col {
+    padding: 10px 8px;
+    gap: 12px;
+  }
+
+  /* toolbar */
+  .app-toolbar { padding: 4px 0 10px; gap: 6px; }
+  .toolbar-right { margin-left: 0; width: 100%; justify-content: flex-end; }
+
+  /* hide debug badge on mobile */
+  #firebase-debug { display: none; }
+
+  /* calendar: smaller cells */
+  .cal-day {
+    min-height: 52px;
+    padding: 4px 2px;
+    border-radius: 6px;
+  }
+  .cal-day .day-number {
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+  /* hide mini-task labels inside calendar on small phones */
+  .cal-day .mini-task {
+    display: none;
+  }
+  /* but keep the dot indicator */
+  .cal-day.has-task::after {
+    width: 4px;
+    height: 4px;
+    bottom: 3px;
+  }
+  .cal-day .more-count {
+    display: none;
+  }
+  .cal-dow {
+    font-size: 10px;
+    padding: 4px 0;
+  }
+
+  /* task cards: wrap action buttons */
+  .task-card > div:first-child {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .task-card .cal-nav,
+  .task-card .cal-nav.small {
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+
+  /* stats */
+  .stat-val { font-size: 16px; }
+
+  /* splash */
+  .splash-card {
+    width: 97%;
+    padding: 14px 12px;
+  }
+  .splash-header h2 { font-size: 15px; }
+  .splash-actions {
+    gap: 6px;
+  }
+  .splash-actions .cal-nav {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  /* modals */
+  .modal-card {
+    width: 94%;
+    padding: 14px;
+  }
+  .popover-card {
+    width: 96%;
+    padding: 12px;
+  }
+  .popover-body {
+    max-height: 240px;
+  }
+  .popover-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .popover-item > div:last-child {
+    align-self: flex-end;
+  }
+
+  /* profile modal */
+  .profile-card {
+    width: 96%;
+    padding: 14px;
+  }
+
+  /* attachment panel */
+  .attachment-preview {
+    flex-wrap: wrap;
+  }
+  .attachment-progress-outer {
+    width: 100%;
+  }
+  .attachment-meta {
+    min-width: 0;
+    flex: 1;
+  }
+
+  /* section titles */
+  .section-title { font-size: 9px; }
+
+  /* bottom bar */
+  .bottom-input-wrap textarea {
+    font-size: 13px;
+  }
+
 }
 
 /* bottom floating IA bar */
@@ -355,13 +526,29 @@ body {
 .bottom-send { width:42px; height:36px; border-radius:10px; border:none; background: linear-gradient(135deg,var(--accent),var(--accent2)); display:flex; align-items:center; justify-content:center; box-shadow: 0 8px 24px rgba(79,142,247,0.16); cursor:pointer; margin-left: 2px; z-index: 6; }
 .bottom-send:active{ transform: scale(.98); }
 
-@media (max-width: 700px){ .bottom-ia{ left: 8px; right: 8px; transform:none; width: calc(100% - 16px);} }
+@media (max-width: 700px) {
+  .bottom-ia {
+    left: 8px;
+    right: 8px;
+    transform: translateY(8px);
+    width: calc(100% - 16px);
+  }
+  .bottom-ia.visible {
+    transform: translateY(0);
+    animation: bottom-in-mobile .32s cubic-bezier(.2,.9,.2,1);
+  }
+}
 
 @keyframes bar-in { from { opacity: 0; transform: translateY(12px) translateX(-50%);} to { opacity:1; transform: translateY(0) translateX(-50%);} }
 
 @keyframes bottom-in {
   from { opacity: 0; transform: translateY(8px) translateX(-50%) scale(.985); }
   to { opacity: 1; transform: translateY(0) translateX(-50%) scale(1); }
+}
+
+@keyframes bottom-in-mobile {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* SPLASH styles */
