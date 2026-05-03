@@ -1,38 +1,46 @@
-import { collection, addDoc, getDocs, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
+
+// Helper function to get user-scoped collection path
+function getUserCollection(collectionName) {
+  if (!window.auth || !window.auth.currentUser) {
+    console.error('User not authenticated');
+    return null;
+  }
+  const uid = window.auth.currentUser.uid;
+  return collection(window.db, 'users', uid, collectionName);
+}
+
+// Helper function to get user-prefixed localStorage key
+function getUserLocalStorageKey(key) {
+  if (!window.auth || !window.auth.currentUser) return key;
+  return `${window.auth.currentUser.uid}_${key}`;
+}
+
+function getTimerStorageKey() {
+  return getUserLocalStorageKey('agenda_timer');
+}
+
+function getAggregatesStorageKey() {
+  return getUserLocalStorageKey('agenda_aggregates');
+}
 
 // basic calendar/runtime globals
 const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 let tasks = [];
-try{ tasks = JSON.parse(localStorage.getItem('agenda_tasks')||'[]') || []; }catch(e){ tasks = []; }
-
-// migrate existing tasks: if a task is marked onlyExam and its name looks like the day-of-exam, mark onlyExamDay
-try{
-  let migrated = false;
-  for(const t of tasks){
-    if(t && t.onlyExam && !t.onlyExamDay){
-      try{
-        const n = (t.name||'').toLowerCase();
-        if(/\bdia\b|dia da prova|dia\s+da/i.test(n) || /\bdia\s+\d{1,2}\b/.test(n)){
-          t.onlyExamDay = true; migrated = true;
-        }
-      }catch(e){}
-    }
-  }
-  if(migrated) try{ localStorage.setItem('agenda_tasks', JSON.stringify(tasks)); }catch(e){}
-}catch(e){/* ignore migration errors */}
+// tasks are NOT loaded from localStorage at startup — they are loaded after auth in handleAuthStateChange
 
 let vm = (new Date()).getMonth();
 let vy = (new Date()).getFullYear();
 
 function todayStr(){ const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 
-// timer state (tracks currently active timed task)
+// timer state (tracks currently active timed task) — loaded per-user after auth
 let activeTimer = null;
 let timerInterval = null;
-try{ activeTimer = JSON.parse(localStorage.getItem('agenda_timer')||'null'); }catch(e){ activeTimer = null; }
 
 // staged attachments waiting for user Send (not yet persisted to localStorage/Firestore)
 let pendingAttachments = [];
@@ -40,12 +48,260 @@ let pendingAttachments = [];
 // simple in-memory message history used by IA integrations (not window.history)
 let history = [];
 
+// current user profile used for personalized greeting in the splash
+let currentUserProfile = null;
+
+function getProfileStorageKey(uid){
+  if(!uid) return 'agenda_profile';
+  return `${uid}_agenda_profile`;
+}
+
+function normalizeProfile(profile){
+  const rawName = String(profile && profile.name ? profile.name : '').trim();
+  const name = rawName
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+  const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
+  return { name, gender };
+}
+
+function buildGreeting(profile){
+  const p = normalizeProfile(profile || {});
+  if(!p.name) return 'Bem-vindo moreno';
+  const prefix = p.gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  return `${prefix} ${p.name}`;
+}
+
+function buildLiveGreeting(profile){
+  const rawName = String(profile && profile.name ? profile.name : '').replace(/\s+/g, ' ').trim();
+  const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
+  const prefix = gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  if(!rawName) return prefix;
+  return `${prefix} ${rawName}`;
+}
+
+function updateSplashGreeting(profile, live = false){
+  const el = document.getElementById('splash-greeting');
+  const text = live ? buildLiveGreeting(profile) : buildGreeting(profile);
+  if(el) el.textContent = text;
+  const preview = document.getElementById('profile-preview');
+  if(preview && profile) preview.textContent = text;
+}
+
+function showSplashUI(){
+  const splash = document.getElementById('splash');
+  if(splash) splash.style.display = 'flex';
+  const bottom = document.getElementById('bottom-ia-bar') || document.querySelector('.bottom-ia');
+  if(bottom) bottom.classList.remove('visible');
+}
+
+function hideProfileModal(){
+  const modal = document.getElementById('profile-modal');
+  if(modal) modal.classList.add('hidden');
+}
+
+function showProfileModal(){
+  const modal = document.getElementById('profile-modal');
+  if(modal) modal.classList.remove('hidden');
+  const nameInput = document.getElementById('profile-name');
+  if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+}
+
+async function loadUserProfile(uid){
+  try{
+    if(!uid) return null;
+
+    // Always try localStorage first for instant render — overwrite below if Firestore responds
+    const lsKey = getProfileStorageKey(uid);
+    let localProfile = null;
+    try{
+      const raw = localStorage.getItem(lsKey);
+      if(raw){ const p = normalizeProfile(JSON.parse(raw)); if(p.name) localProfile = p; }
+    }catch(e){}
+
+    if(window.db){
+      const docRef = doc(window.db, 'users', uid);
+      // getDoc: uses cache when offline, hits server when online — never throws on connectivity
+      try{
+        const snap = await getDoc(docRef);
+        if(snap.exists()){
+          const profile = normalizeProfile((snap.data() || {}).profile || {});
+          if(profile.name){
+            localStorage.setItem(lsKey, JSON.stringify(profile));
+            // fire-and-forget server refresh so next load is always fresh
+            getDocFromServer(docRef).then(s2 => {
+              if(s2.exists()){
+                const p2 = normalizeProfile((s2.data() || {}).profile || {});
+                if(p2.name) localStorage.setItem(lsKey, JSON.stringify(p2));
+              }
+            }).catch(()=>{});
+            return profile;
+          }
+        }
+      }catch(e){
+        console.warn('loadUserProfile getDoc failed:', e.code || e.message);
+      }
+    }
+
+    // Firestore failed or returned no profile — fall back to localStorage
+    return localProfile;
+  }catch(e){ console.warn('loadUserProfile', e); return null; }
+}
+
+async function saveUserProfile(uid, profile){
+  const cleaned = normalizeProfile(profile || {});
+  if(!cleaned.name) return null;
+  // Save locally and update UI immediately — never await Firestore here
+  localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
+  currentUserProfile = cleaned;
+  updateSplashGreeting(cleaned);
+  // Persist to Firestore in background (fire-and-forget)
+  if(window.db && uid){
+    setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true })
+      .catch(e => console.warn('saveUserProfile firestore:', e.code || e.message));
+  }
+  return cleaned;
+}
+
+function renderAccountInfo(profile){
+  const el = document.getElementById('profile-account-info');
+  const user = window.auth && window.auth.currentUser;
+  if(!el) return;
+  if(!user){
+    el.textContent = 'Você precisa estar logado para ver os dados da conta.';
+    return;
+  }
+  const p = normalizeProfile(profile || currentUserProfile || {});
+  const displayName = p.name || 'Não definido';
+  const genderLabel = p.gender === 'fem' ? 'Feminino' : 'Masculino';
+  el.innerHTML = `
+    <div><strong>Email:</strong> ${user.email || 'sem email'}</div>
+    <div><strong>Nome:</strong> ${displayName}</div>
+    <div><strong>Saudação:</strong> ${genderLabel}</div>
+  `;
+}
+
+async function openAccountPanel(){
+  try{
+    const user = window.auth && window.auth.currentUser;
+    if(!user) return;
+
+    // Open the modal immediately with whatever we have — don't await Firestore
+    const instant = currentUserProfile || { name:'', gender:'masc' };
+    const nameInput = document.getElementById('profile-name');
+    const genderInput = document.getElementById('profile-gender');
+    if(nameInput) nameInput.value = instant.name || '';
+    if(genderInput) genderInput.value = instant.gender || 'masc';
+    renderAccountInfo(instant);
+    const preview = document.getElementById('profile-preview');
+    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo moreno';
+    const liveExample = document.getElementById('profile-live-example');
+    if(liveExample) liveExample.textContent = instant.name ? buildLiveGreeting(instant) : '';
+    const modal = document.getElementById('profile-modal');
+    if(modal) modal.classList.remove('hidden');
+    if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+
+    // Refresh from Firestore in background — updates fields if they load later
+    loadUserProfile(user.uid).then(profile => {
+      if(!profile) return;
+      currentUserProfile = normalizeProfile(profile);
+      if(nameInput && document.activeElement !== nameInput) nameInput.value = currentUserProfile.name || '';
+      if(genderInput && document.activeElement !== genderInput) genderInput.value = currentUserProfile.gender || 'masc';
+      renderAccountInfo(currentUserProfile);
+      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+      if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    }).catch(()=>{});
+  }catch(e){ console.warn('openAccountPanel', e); }
+}
+
+function syncProfilePreview(){
+  const name = (document.getElementById('profile-name') || {}).value || '';
+  const gender = (document.getElementById('profile-gender') || {}).value || 'masc';
+  const preview = document.getElementById('profile-preview');
+  const liveExample = document.getElementById('profile-live-example');
+  const message = document.getElementById('profile-message');
+  const profile = { name, gender };
+  const liveGreeting = buildLiveGreeting(profile);
+  if(preview) preview.textContent = liveGreeting;
+  if(liveExample) liveExample.textContent = liveGreeting;
+  updateSplashGreeting(profile, true);
+  if(message) message.textContent = '';
+}
+window.syncProfilePreview = syncProfilePreview;
+
+function showProfileError(msg){
+  const message = document.getElementById('profile-message');
+  if(message) message.textContent = msg;
+}
+
+async function refreshWelcomeGate(user){
+  try{
+    if(!user){
+      currentUserProfile = null;
+      hideProfileModal();
+      updateSplashGreeting(null);
+      return;
+    }
+    showSplashUI();
+    const profile = await loadUserProfile(user.uid);
+    currentUserProfile = profile;
+    if(profile){
+      updateSplashGreeting(profile);
+      renderAccountInfo(profile);
+      hideProfileModal();
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = buildLiveGreeting(profile);
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = buildLiveGreeting(profile);
+    } else {
+      updateSplashGreeting({ name:'', gender:'masc' });
+      const nameInput = document.getElementById('profile-name');
+      const genderInput = document.getElementById('profile-gender');
+      if(nameInput) nameInput.value = '';
+      if(genderInput) genderInput.value = 'masc';
+      const preview = document.getElementById('profile-preview');
+      if(preview) preview.textContent = 'Bem-vindo moreno';
+      const liveExample = document.getElementById('profile-live-example');
+      if(liveExample) liveExample.textContent = '';
+      renderAccountInfo({ name:'', gender:'masc' });
+      showProfileModal();
+    }
+  }catch(e){ console.warn('refreshWelcomeGate', e); }
+}
+
+window.saveWelcomeProfile = async function(){
+  try{
+    const user = window.auth && window.auth.currentUser;
+    if(!user) return;
+    const name = (document.getElementById('profile-name') || {}).value || '';
+    const gender = (document.getElementById('profile-gender') || {}).value || 'masc';
+    const cleaned = normalizeProfile({ name, gender });
+    if(!cleaned.name){
+      showProfileError('Digite seu nome para continuar.');
+      const nameInput = document.getElementById('profile-name');
+      if(nameInput) nameInput.focus();
+      return;
+    }
+    await saveUserProfile(user.uid, cleaned);
+    renderAccountInfo(cleaned);
+    hideProfileModal();
+    updateSplashGreeting(cleaned);
+    // Go straight to the app — hideSplash shows the bottom bar
+    hideSplash();
+  }catch(e){ console.warn('saveWelcomeProfile', e); }
+};
+
+window.openAccountPanel = openAccountPanel;
+
 
 // helper to persist messages to Firestore (non-blocking)
 async function saveMessageToFirebase(role, text){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'messages');
+    const col = getUserCollection('messages');
+    if (!col) return;
     await addDoc(col, { role, text, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveMessageToFirebase', e); }
 }
@@ -55,7 +311,8 @@ async function saveLearningRecord(kind, payload){
     if(!window.db) return;
     const enabled = localStorage.getItem('agenda_learning') === '1';
     if(!enabled) return;
-    const col = collection(window.db, 'learning');
+    const col = getUserCollection('learning');
+    if (!col) return;
     await addDoc(col, { kind, payload, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveLearningRecord', e); }
 }
@@ -64,16 +321,23 @@ async function saveLearningRecord(kind, payload){
 async function saveAttachmentRecord(name, url, size, mime, ocr){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'attachments');
+    const col = getUserCollection('attachments');
+    if (!col) return;
     await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveAttachmentRecord', e); }
 }
 
-// local attachments storage (persist metadata in localStorage for quick access)
-function loadLocalAttachments(){
-  try{ return JSON.parse(localStorage.getItem('agenda_attachments')||'[]'); }catch(e){ return []; }
+// local attachments storage (persist metadata in localStorage for quick access) - USER SCOPED
+function getAttachmentsStorageKey(){
+  if (!window.auth || !window.auth.currentUser) return 'agenda_attachments';
+  return `${window.auth.currentUser.uid}_agenda_attachments`;
 }
-function saveLocalAttachments(list){ localStorage.setItem('agenda_attachments', JSON.stringify(list||[])); }
+function loadLocalAttachments(){
+  try{ return JSON.parse(localStorage.getItem(getAttachmentsStorageKey())||'[]'); }catch(e){ return []; }
+}
+function saveLocalAttachments(list){
+  try{ localStorage.setItem(getAttachmentsStorageKey(), JSON.stringify(list||[])); }catch(e){ console.warn('saveLocalAttachments', e); }
+}
 
 function registerAttachmentLocalRecord(name, url, size, mime, ocr){
   try{
@@ -88,31 +352,7 @@ function registerAttachmentLocalRecord(name, url, size, mime, ocr){
 }
 
 function removeLocalAttachment(id){
-  try{
-    const list = loadLocalAttachments();
-    const target = list.find(a=>a.id===id);
-    const filtered = list.filter(a=>a.id!==id);
-    saveLocalAttachments(filtered);
-    renderAttachmentsPanel();
-    try{
-      const urls = target && target.url ? [target.url] : [];
-      const names = target && target.name ? [target.name] : [];
-      const roots = [document.getElementById('bottom-replies'), document.getElementById('splash-replies')].filter(Boolean);
-      for(const root of roots){
-        const previews = Array.from(root.querySelectorAll('.attachment-preview'));
-        for(const preview of previews){
-          const link = preview.querySelector('.attachment-status a');
-          const title = preview.querySelector('.attachment-title');
-          const href = link && link.href ? link.href : '';
-          const titleText = title && title.textContent ? title.textContent.trim() : '';
-          if((href && urls.includes(href)) || (titleText && names.includes(titleText))){
-            preview.remove();
-          }
-        }
-      }
-      try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
-    }catch(e){ console.warn('removeLocalAttachment cleanup failed', e); }
-  }catch(e){ console.warn('removeLocalAttachment', e); }
+  try{ const list = loadLocalAttachments().filter(a=>a.id!==id); saveLocalAttachments(list); renderAttachmentsPanel(); }catch(e){ console.warn('removeLocalAttachment', e); }
 }
 
 function createTaskFromAttachment(id){
@@ -157,11 +397,17 @@ try{ setTimeout(()=>{ renderAttachmentsPanel(); }, 200); }catch(e){}
 // hide setup banner when GROQ key is present (avoid showing warning on configured installs)
 try{
   setTimeout(()=>{
+    if(typeof window.syncSetupBannerVisibility === 'function'){
+      window.syncSetupBannerVisibility();
+      return;
+    }
     const banner = document.getElementById('setup-banner');
     if(!banner) return;
-    const key = window.GROQ_API_KEY || window.GROQ_API_KEY === '' ? window.GROQ_API_KEY : null;
+    const key = (window.GROQ_API_KEY || '').trim();
     if(key && key !== 'COLE_SUA_CHAVE_GROQ_AQUI' && key !== 'REDACTED_API_KEY'){
       banner.classList.add('hidden');
+    } else {
+      banner.classList.remove('hidden');
     }
   }, 300);
 }catch(e){ console.warn('hide setup banner failed', e); }
@@ -275,13 +521,149 @@ function renderCal(){
 const CAT_COLORS = { trabalho:'#4f8ef7', estudo:'#3ecf8e', pessoal:'#a78bfa', projeto:'#f5a623', outro:'#7a7f8e' };
 
 function saveTasks(){
-  localStorage.setItem('agenda_tasks', JSON.stringify(tasks));
+  try{
+    const key = getUserLocalStorageKey('agenda_tasks');
+    localStorage.setItem(key, JSON.stringify(tasks));
+  }catch(e){ console.warn('saveTasks localStorage write failed', e); }
   if(window.db){
     saveToFirebase(tasks).catch(e=>console.error('saveTasks->saveToFirebase', e));
   }
   // recompute aggregates and update UI whenever tasks change
   computeAggregates();
   try{ renderSplashTasks(); }catch(e){}
+}
+
+// Load tasks for a given user (Firestore first, localStorage fallback)
+async function loadTasksForUser(uid){
+  try{
+    tasks = [];
+    activeTimer = null;
+    try{ activeTimer = JSON.parse(localStorage.getItem(uid + '_agenda_timer') || 'null'); }catch(e){ activeTimer = null; }
+    try{ const ex = JSON.parse(localStorage.getItem(uid + '_agenda_aggregates') || 'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
+
+    const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
+    let local = null;
+    try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
+    // one-time migration: move legacy unscoped key to uid-scoped key
+    if(uid && (!Array.isArray(local) || !local.length)){
+      try{
+        const legacy = JSON.parse(localStorage.getItem('agenda_tasks') || 'null');
+        if(Array.isArray(legacy) && legacy.length){
+          local = legacy;
+          localStorage.setItem(key, JSON.stringify(legacy));
+          localStorage.removeItem('agenda_tasks');
+          console.log('[loadTasksForUser] migrated legacy agenda_tasks →', key);
+        }
+      }catch(e){ console.warn('[loadTasksForUser] legacy migration failed', e); }
+    }
+
+    // ── Firestore fetch ──────────────────────────────────────────
+    // With memory cache (no persistentLocalCache), getDocs() always goes to the server.
+    // Falls back to localStorage when the server is unreachable.
+    let remote = null;
+    if(window.db && uid){
+      const col = getUserCollection('tasks');
+      if(col){
+        try{
+          console.log('[loadTasksForUser] fetching from Firestore…');
+          const snap = await getDocs(col);
+          remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          console.log('[loadTasksForUser] OK —', remote.length, 'docs');
+        }catch(e){
+          console.warn('[loadTasksForUser] Firestore failed:', e.code || e.message, '— using localStorage');
+        }
+      }
+    }
+
+    // Firestore responded (even with 0 docs = account is empty or genuinely new)
+    if(remote !== null){
+      if(remote.length > 0){
+        tasks = remote;
+        try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        return;
+      }
+      // Server returned 0 docs — if localStorage has data, push it up (first-time migration)
+      if(Array.isArray(local) && local.length){
+        console.log('[loadTasksForUser] Firestore empty, pushing', local.length, 'local tasks up');
+        tasks = local;
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
+        return;
+      }
+      // Genuinely empty account
+      tasks = [];
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
+    }
+
+    // Firestore unreachable — use localStorage
+    if(Array.isArray(local) && local.length){
+      console.log('[loadTasksForUser] Firestore unreachable, using localStorage —', local.length, 'tasks');
+      tasks = local;
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
+    }
+  }catch(e){ console.warn('[loadTasksForUser] unexpected error', e); }
+
+  tasks = [];
+  computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+}
+
+// Called from auth state changes to load appropriate tasks
+window.handleAuthStateChange = async function(user){
+  try{
+    try{ console.debug('DEBUG: handleAuthStateChange invoked, user=', user && user.uid); }catch(e){}
+    if(user){
+      // First: clear old UI elements from previous account BEFORE loading new data
+      tasks = [];
+      const msgs = document.getElementById('msgs');
+      if(msgs) msgs.innerHTML = '';
+      const splashReplies = document.getElementById('splash-replies');
+      if(splashReplies) splashReplies.innerHTML = '';
+      const bottomReplies = document.getElementById('bottom-replies');
+      if(bottomReplies) bottomReplies.innerHTML = '';
+      const dbgPanel = document.getElementById('splash-debug');
+      if(dbgPanel) dbgPanel.remove();
+      const el = document.getElementById('splash-tasks');
+      if(el) el.innerHTML = '';
+      
+      // Second: load user-specific tasks, messages, and profile
+      try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
+      await loadTasksForUser(user.uid);
+      try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
+      try{
+        const userMessages = await loadMessagesFromFirebase();
+        if(userMessages && userMessages.length > 0){
+          for(const msg of userMessages){
+            addMsg(msg.role || 'ai', msg.text || '');
+          }
+        }
+      }catch(e){ console.warn('load messages failed', e); }
+      refreshWelcomeGate(user);
+    } else {
+      // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
+      tasks = [];
+      currentUserProfile = null;
+      hideProfileModal();
+      // Clear chat DOM
+      const msgs = document.getElementById('msgs');
+      if(msgs) msgs.innerHTML = '';
+      // Clear splash messages
+      const splashReplies = document.getElementById('splash-replies');
+      if(splashReplies) splashReplies.innerHTML = '';
+      // Clear bottom bar messages
+      const bottomReplies = document.getElementById('bottom-replies');
+      if(bottomReplies) bottomReplies.innerHTML = '';
+      // Clear debug panel
+      const dbgPanel = document.getElementById('splash-debug');
+      if(dbgPanel) dbgPanel.remove();
+      const el = document.getElementById('splash-tasks');
+      if(el) el.innerHTML = '';
+      const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+    }
+  }catch(e){ console.warn('handleAuthStateChange', e); }
 }
 
 // ── normalize and aggregates ───────────────────────────────────
@@ -413,6 +795,7 @@ function buildExamPlan(examDateStr, attachmentUrl, text){
   const diffDays = Math.max(0, Math.floor((examDate.setHours(0,0,0,0) - (new Date()).setHours(0,0,0,0)) / 86400000));
   const plan = [];
   const steps = [];
+  const examId = 'exam_' + examDateStr;
 
   if(diffDays >= 3){
     steps.push({ offset: -3, name: 'Preparar conteúdo para prova', est: 120 });
@@ -436,7 +819,8 @@ function buildExamPlan(examDateStr, attachmentUrl, text){
       date,
       time: step.offset === 0 ? '14:00' : '18:00',
       cat: 'estudo',
-      est: step.est
+      est: step.est,
+      examId: examId
     };
     // attach the provided attachment to all exam-related plan tasks (prep, revisão, dia da prova)
     if(attachmentUrl) task.attachment = attachmentUrl;
@@ -498,7 +882,7 @@ function computeAggregates(){
   const nameAgg = {};
   for(const k of Object.keys(nameStats)) nameAgg[k] = { avg: Math.round((nameStats[k].sum/nameStats[k].count)||0), n: nameStats[k].count, sample: nameStats[k].sample };
   const agg = { byCategory: catAgg, byName: nameAgg, computedAt: new Date().toISOString() };
-  localStorage.setItem('agenda_aggregates', JSON.stringify(agg));
+  localStorage.setItem(getAggregatesStorageKey(), JSON.stringify(agg));
   renderAggregatesUI(agg);
   return agg;
 }
@@ -522,8 +906,7 @@ function renderAggregatesUI(agg){
   container.innerHTML = html;
 }
 
-// try load existing aggregates on init
-try{ const ex = JSON.parse(localStorage.getItem('agenda_aggregates')||'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
+// aggregates are loaded per-user after auth in loadTasksForUser
 
 // ── CRUD manual, export/import ───────────────────────────────────
 function createTask(){
@@ -555,14 +938,37 @@ function addTaskForDate(dateStr){
 function editTask(i){
   if(typeof i!=='number') return;
   const t = tasks[i]; if(!t) return;
-  const name = prompt('Nome da tarefa:', t.name) || t.name;
-  const date = prompt('Data (YYYY-MM-DD):', t.date) || t.date;
-  const time = prompt('Hora (HH:MM) — opcional:', t.time||'') || t.time;
-  const cat  = prompt('Categoria (trabalho|estudo|pessoal|projeto|outro):', t.cat) || t.cat;
-  const est  = parseInt(prompt('Estimativa em minutos:', String(t.est||60))||String(t.est||60),10) || t.est || 60;
-  tasks[i] = { name, date, time: time||null, cat, est };
-  saveTasks(); renderCal(); renderTasks();
-  try{ saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
+  // Preencher modal com dados atuais
+  const modal = document.getElementById('edit-task-modal');
+  if(!modal) return;
+  modal.classList.remove('hidden');
+  modal.dataset.taskIndex = i;
+  document.getElementById('edit-task-name').value = t.name || '';
+  document.getElementById('edit-task-date').value = t.date || '';
+  document.getElementById('edit-task-time').value = t.time || '';
+  document.getElementById('edit-task-cat').value = t.cat || 'outro';
+  document.getElementById('edit-task-est').value = t.est || 60;
+  // Anexos (exibição simplificada)
+  const attDiv = document.getElementById('edit-task-attachments');
+  attDiv.innerHTML = '';
+  if(t.attachment){
+    const a = document.createElement('div');
+    a.innerHTML = `<a href="${t.attachment}" target="_blank">Ver anexo</a>`;
+    attDiv.appendChild(a);
+  }
+  document.getElementById('edit-task-message').textContent = '';
+  // Cancelar fecha modal
+  document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); };
+  // Adicionar novo anexo (substitui o anterior)
+  document.getElementById('edit-task-add-attachment').onchange = function(ev){
+    const file = ev.target.files[0];
+    if(file){
+      const url = URL.createObjectURL(file);
+      attDiv.innerHTML = `<a href="${url}" target="_blank">${file.name}</a>`;
+      attDiv.dataset.newAttachment = url;
+      attDiv.dataset.newAttachmentName = file.name;
+    }
+  };
 }
 
 function deleteTask(i){
@@ -644,6 +1050,35 @@ function closeDatePopover(){ const pop = document.getElementById('date-popover')
 // wire popover close button
 setTimeout(()=>{ const b = document.getElementById('popover-close'); if(b) b.addEventListener('click', closeDatePopover); }, 80);
 
+
+// Salvar edição de tarefa
+document.addEventListener('DOMContentLoaded', function(){
+  const form = document.getElementById('edit-task-form');
+  if(form){
+    form.onsubmit = function(ev){
+      ev.preventDefault();
+      const modal = document.getElementById('edit-task-modal');
+      const i = parseInt(modal.dataset.taskIndex, 10);
+      if(isNaN(i) || !tasks[i]) return;
+      const name = document.getElementById('edit-task-name').value.trim();
+      const date = document.getElementById('edit-task-date').value;
+      const time = document.getElementById('edit-task-time').value;
+      const cat  = document.getElementById('edit-task-cat').value;
+      const est  = parseInt(document.getElementById('edit-task-est').value, 10) || 60;
+      // Anexo
+      const attDiv = document.getElementById('edit-task-attachments');
+      let attachment = tasks[i].attachment;
+      if(attDiv.dataset.newAttachment){
+        attachment = attDiv.dataset.newAttachment;
+      }
+      tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
+      saveTasks(); renderCal(); renderTasks();
+      modal.classList.add('hidden');
+      try{ saveEventAndLearning && saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
+    };
+  }
+});
+
 // expõe funções
 window.createTask = createTask;
 window.editTask = editTask;
@@ -675,53 +1110,56 @@ function renderTasks(){
     ? (totalMin>=60 ? (Math.round(totalMin/6)/10)+'h' : totalMin+'min')
     : '—';
 
-  if(!upcoming.length){ list.innerHTML='<div class="no-tasks">Nenhuma tarefa ainda</div>'; return; }
-  // build DOM nodes to avoid inline onclick issues and keep stable references
-  list.innerHTML = '';
-  upcoming.forEach(t=>{
-    const c   = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    const est = t.est ? (t.est>=60 ? Math.round(t.est/6)/10+'h' : t.est+'min') : '';
-    const dl  = t.date===td ? 'hoje' : t.date.split('-').reverse().slice(0,2).join('/');
-    let globalIndex = tasks.findIndex(x => (x && x._id && t && t._id) ? x._id === t._id : x === t);
-    if(globalIndex === -1) globalIndex = tasks.indexOf(t);
+  if(!upcoming.length){
+    list.innerHTML='<div class="no-tasks">Nenhuma tarefa ainda</div>';
+  } else {
+    // build DOM nodes to avoid inline onclick issues and keep stable references
+    list.innerHTML = '';
+    upcoming.forEach(t=>{
+      const c   = CAT_COLORS[t.cat]||CAT_COLORS.outro;
+      const est = t.est ? (t.est>=60 ? Math.round(t.est/6)/10+'h' : t.est+'min') : '';
+      const dl  = t.date===td ? 'hoje' : t.date.split('-').reverse().slice(0,2).join('/');
+      let globalIndex = tasks.findIndex(x => (x && x._id && t && t._id) ? x._id === t._id : x === t);
+      if(globalIndex === -1) globalIndex = tasks.indexOf(t);
 
-    const card = document.createElement('div'); card.className = 'task-card';
-    const top = document.createElement('div'); top.style.display = 'flex'; top.style.alignItems = 'center'; top.style.justifyContent = 'space-between';
+      const card = document.createElement('div'); card.className = 'task-card';
+      const top = document.createElement('div'); top.style.display = 'flex'; top.style.alignItems = 'center'; top.style.justifyContent = 'space-between';
 
-    const left = document.createElement('div'); left.style.display='flex'; left.style.alignItems='center'; left.style.gap='8px';
-    const dot = document.createElement('div'); dot.className = 'task-dot'; dot.style.background = c;
-    const nameEl = document.createElement('span'); nameEl.className='task-name'; nameEl.textContent = t.name;
-    left.appendChild(dot); left.appendChild(nameEl);
+      const left = document.createElement('div'); left.style.display='flex'; left.style.alignItems='center'; left.style.gap='8px';
+      const dot = document.createElement('div'); dot.className = 'task-dot'; dot.style.background = c;
+      const nameEl = document.createElement('span'); nameEl.className='task-name'; nameEl.textContent = t.name;
+      left.appendChild(dot); left.appendChild(nameEl);
 
-    const right = document.createElement('div'); right.style.display='flex'; right.style.gap='8px'; right.style.alignItems='center';
-    if(t.actualDuration){ const elapsed = document.createElement('div'); elapsed.className='elapsed'; elapsed.textContent = t.actualDuration + ' min'; right.appendChild(elapsed); }
+      const right = document.createElement('div'); right.style.display='flex'; right.style.gap='8px'; right.style.alignItems='center';
+      if(t.actualDuration){ const elapsed = document.createElement('div'); elapsed.className='elapsed'; elapsed.textContent = t.actualDuration + ' min'; right.appendChild(elapsed); }
 
-    const startBtn = document.createElement('button'); startBtn.className = 'cal-nav';
-    const isActive = activeTimer && ((activeTimer.id && t && t._id && activeTimer.id===t._id) || activeTimer.index===globalIndex);
-    startBtn.textContent = isActive ? 'Parar' : 'Iniciar';
-    startBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); toggleTimer(globalIndex); renderTasks(); renderCal(); });
+      const startBtn = document.createElement('button'); startBtn.className = 'cal-nav';
+      const isActive = activeTimer && ((activeTimer.id && t && t._id && activeTimer.id===t._id) || activeTimer.index===globalIndex);
+      startBtn.textContent = isActive ? 'Parar' : 'Iniciar';
+      startBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); toggleTimer(globalIndex); renderTasks(); renderCal(); });
 
-    const conclBtn = document.createElement('button'); conclBtn.className = 'cal-nav'; conclBtn.textContent = 'concluir';
-    conclBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); markTaskDone(globalIndex); });
+      const conclBtn = document.createElement('button'); conclBtn.className = 'cal-nav'; conclBtn.textContent = 'concluir';
+      conclBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); markTaskDone(globalIndex); });
 
-    right.appendChild(startBtn); right.appendChild(conclBtn);
-    // exam / work toggles
-    const examBtn = document.createElement('button'); examBtn.className = 'cal-nav small'; examBtn.textContent = t.onlyExam ? 'Prova ✓' : 'Prova';
-    examBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyExam = !t.onlyExam; saveTasks(); renderTasks(); renderCal(); });
-    right.appendChild(examBtn);
-    const workBtn = document.createElement('button'); workBtn.className = 'cal-nav small'; workBtn.textContent = t.onlyWork ? 'Trabalho ✓' : 'Trabalho';
-    workBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyWork = !t.onlyWork; saveTasks(); renderTasks(); renderCal(); });
-    right.appendChild(workBtn);
-    top.appendChild(left); top.appendChild(right);
-    const meta = document.createElement('div'); meta.className='task-meta'; meta.textContent = dl + (t.time? ' · '+t.time: '') + (est? ' · '+est: '');
-    card.appendChild(top); card.appendChild(meta);
-    // flags (Prova / Trabalho)
-    const flagsWrap = document.createElement('div'); flagsWrap.innerHTML = taskFlagsHtml(t);
-    card.appendChild(flagsWrap);
-    // clicking the task card opens the date popover (same as clicking the day in the calendar)
-    card.addEventListener('click', ()=>{ try{ showDatePopover(t.date); }catch(e){ console.warn('open date popover from task card', e); } });
-    list.appendChild(card);
-  });
+      right.appendChild(startBtn); right.appendChild(conclBtn);
+      // exam / work toggles
+      const examBtn = document.createElement('button'); examBtn.className = 'cal-nav small'; examBtn.textContent = t.onlyExam ? 'Prova ✓' : 'Prova';
+      examBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyExam = !t.onlyExam; saveTasks(); renderTasks(); renderCal(); });
+      right.appendChild(examBtn);
+      const workBtn = document.createElement('button'); workBtn.className = 'cal-nav small'; workBtn.textContent = t.onlyWork ? 'Trabalho ✓' : 'Trabalho';
+      workBtn.addEventListener('click', (ev)=>{ ev.stopPropagation(); t.onlyWork = !t.onlyWork; saveTasks(); renderTasks(); renderCal(); });
+      right.appendChild(workBtn);
+      top.appendChild(left); top.appendChild(right);
+      const meta = document.createElement('div'); meta.className='task-meta'; meta.textContent = dl + (t.time? ' · '+t.time: '') + (est? ' · '+est: '');
+      card.appendChild(top); card.appendChild(meta);
+      // flags (Prova / Trabalho)
+      const flagsWrap = document.createElement('div'); flagsWrap.innerHTML = taskFlagsHtml(t);
+      card.appendChild(flagsWrap);
+      // clicking the task card opens the date popover (same as clicking the day in the calendar)
+      card.addEventListener('click', ()=>{ try{ showDatePopover(t.date); }catch(e){ console.warn('open date popover from task card', e); } });
+      list.appendChild(card);
+    });
+  }
 
   // render exam-only tasks
   try{
@@ -736,7 +1174,7 @@ function renderTasks(){
           item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
           const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
           const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
           const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
           const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
           const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
@@ -761,7 +1199,7 @@ function renderTasks(){
           item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
           const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
           const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : ''); left.appendChild(meta);
+          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
           const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
           const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
           const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
@@ -782,6 +1220,9 @@ function renderTasks(){
     const visible = tasks.filter(t=>t && t.name && String(t.name).trim().length>0);
     const pending = visible.filter(t=>!t.completedAt).sort((a,b)=> a.date>b.date?1:-1).slice(0,6);
     el.innerHTML = '';
+    // Clean up debug panel if it exists
+    const dbgOld = document.getElementById('splash-debug');
+    if(dbgOld) dbgOld.remove();
     console.debug('renderSplashTasks: tasks.length=', tasks.length, 'pending.length=', pending.length, tasks.slice(0,6));
     if(!pending.length){
       if(visible.length>0){
@@ -791,10 +1232,10 @@ function renderTasks(){
       }
       return;
     }
-    // debug panel: show counts and first names so user can see what's loaded
-    let dbg = document.getElementById('splash-debug');
-    if(!dbg){ dbg = document.createElement('div'); dbg.id = 'splash-debug'; dbg.style.fontSize='12px'; dbg.style.color='var(--muted)'; dbg.style.marginTop='8px'; el.parentNode.insertBefore(dbg, el.nextSibling); }
+    // debug panel: show counts and first names so user can see what's loaded (only if pending tasks exist)
+    let dbg = document.createElement('div'); dbg.id = 'splash-debug'; dbg.style.fontSize='12px'; dbg.style.color='var(--muted)'; dbg.style.marginTop='8px';
     try{ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length} — primeiras: ${pending.slice(0,4).map(p=>p.name||'—').join(' | ')}`; }catch(e){ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length}`; }
+    el.parentNode.insertBefore(dbg, el.nextSibling);
     pending.forEach(t=>{
       const i = tasks.indexOf(t);
       const item = document.createElement('div'); item.className = 'splash-task';
@@ -862,7 +1303,7 @@ function renderTasks(){
     if(activeTimer && ((activeTimer.id && tasks.findIndex(t=>t && t._id===activeTimer.id)!==i) || (!activeTimer.id && activeTimer.index!==i)) ) stopTimer();
     const id = tasks[i] && tasks[i]._id ? tasks[i]._id : null;
     activeTimer = { index: i, id, start: new Date().toISOString() };
-    localStorage.setItem('agenda_timer', JSON.stringify(activeTimer));
+    localStorage.setItem(getTimerStorageKey(), JSON.stringify(activeTimer));
     startTimerInterval();
     renderTasks(); renderCal();
   }
@@ -876,14 +1317,14 @@ function renderTasks(){
       i = tasks.findIndex(x=>x && x._id === activeTimer.id);
       if(i !== -1) t = tasks[i];
     }
-    if(!t){ activeTimer = null; localStorage.removeItem('agenda_timer'); return; }
+    if(!t){ activeTimer = null; localStorage.removeItem(getTimerStorageKey()); return; }
     const start = new Date(activeTimer.start);
     const mins = Math.max(1, Math.round((Date.now() - start.getTime())/60000));
     t.actualDuration = (Number(t.actualDuration) || 0) + mins;
     delete t.timerStart;
     saveTasks();
     try{ saveEventAndLearning('task.timed', { taskId: t._id||null, name: t.name, minutes: mins }); }catch(e){}
-    activeTimer = null; localStorage.removeItem('agenda_timer');
+    activeTimer = null; localStorage.removeItem(getTimerStorageKey());
     if(timerInterval){ clearInterval(timerInterval); timerInterval = null; }
     renderTasks(); renderCal();
   }
@@ -990,37 +1431,6 @@ function autoResize(el){
 }
 
 // ── enviar mensagem ───────────────────────────────────────────────
-function isStoragePermissionError(err){
-  const code = err && err.code ? String(err.code) : '';
-  const msg = err && err.message ? String(err.message) : '';
-  return /permission-denied|storage\/unauthorized|unauthorized/i.test(code + ' ' + msg);
-}
-
-async function fallbackAttachmentLocally(att){
-  try{
-    if(!att || !att.file) return { error: 'no-file' };
-    const localUrl = URL.createObjectURL(att.file);
-    att.url = localUrl;
-    try{ if(att.statusEl) att.statusEl.innerHTML = `<a href="${localUrl}" target="_blank" rel="noopener noreferrer">Abrir anexo</a> <span style="color:var(--muted)">(salvo localmente)</span>`; }catch(e){}
-    try{ if(att.progressBar) att.progressBar.style.width = '100%'; }catch(e){}
-    try{ if(att.preview && att.preview.dataset) { delete att.preview.dataset.pending; att.preview.classList.remove('attachment-pending'); } }catch(e){}
-    try{
-      const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url: localUrl, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString(), localOnly: true };
-      const curRaw = localStorage.getItem('agenda_attachments');
-      let cur = [];
-      try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
-      cur.unshift(rec);
-      localStorage.setItem('agenda_attachments', JSON.stringify(cur));
-      try{ renderAttachmentsPanel(); }catch(e){}
-      try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
-    }catch(e){ console.warn('fallback local persist failed', e); }
-    return { url: localUrl, localOnly: true, name: att.name, size: att.size, mime: att.mime };
-  }catch(e){
-    console.warn('fallbackAttachmentLocally', e);
-    return { error: e };
-  }
-}
-
 // upload a staged attachment (used when user clicks Send)
 // `persist` controls whether to save metadata to Firestore/localStorage after upload.
 async function uploadPendingAttachment(att, persist = true){
@@ -1036,11 +1446,12 @@ async function uploadPendingAttachment(att, persist = true){
             try{ saveAttachmentRecord(att.name, att.url, att.size, att.mime, att.ocr).catch(e=>console.warn('saveAttachmentRecord failed', e)); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
             try{
               const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url: att.url, size: Number(att.size||0), mime: att.mime||null, ocr: att.ocr||null, ts: new Date().toISOString() };
-              const curRaw = localStorage.getItem('agenda_attachments');
+              const _attKey = getAttachmentsStorageKey();
+              const curRaw = localStorage.getItem(_attKey);
               let cur = [];
               try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
               cur.unshift(rec);
-              localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+              localStorage.setItem(_attKey, JSON.stringify(cur));
               try{ renderAttachmentsPanel(); }catch(e){}
               try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
               // remove pending marker from preview since it's now persisted
@@ -1060,8 +1471,7 @@ async function uploadPendingAttachment(att, persist = true){
             try{ const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100); if(att.progressBar) att.progressBar.style.width = pct + '%'; if(att.statusEl) att.statusEl.textContent = 'Enviando — ' + pct + '%'; }catch(e){}
           }, (err)=>{
             try{ console.error('upload failed', err); if(att.statusEl) att.statusEl.textContent = 'Erro: ' + (err && err.message ? err.message : String(err)); }catch(e){}
-            fallbackAttachmentLocally(att).then(resolve).catch(()=>resolve({ error: err }));
-            return;
+            resolve({ error: err });
           }, async ()=>{
             try{
               const url = await getDownloadURL(uploadTask.snapshot.ref);
@@ -1085,11 +1495,12 @@ async function uploadPendingAttachment(att, persist = true){
                 try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
                 try{
                   const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                  const curRaw = localStorage.getItem('agenda_attachments');
+                  const _attKey2 = getAttachmentsStorageKey();
+                  const curRaw = localStorage.getItem(_attKey2);
                   let cur = [];
                   try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
                   cur.unshift(rec);
-                  localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                  localStorage.setItem(_attKey2, JSON.stringify(cur));
                   try{ renderAttachmentsPanel(); }catch(e){}
                   try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                   // remove pending marker from preview since it's now persisted
@@ -1108,8 +1519,7 @@ async function uploadPendingAttachment(att, persist = true){
           try{ const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100); if(att.progressBar) att.progressBar.style.width = pct + '%'; if(att.statusEl) att.statusEl.textContent = 'Enviando — ' + pct + '%'; }catch(e){}
         }, (err)=>{
           try{ console.error('upload failed', err); if(att.statusEl) att.statusEl.textContent = 'Erro: ' + (err && err.message ? err.message : String(err)); }catch(e){}
-          fallbackAttachmentLocally(att).then(resolve).catch(()=>resolve({ error: err }));
-          return;
+          resolve({ error: err });
         }, async ()=>{
           try{
             const url = await getDownloadURL(uploadTask.snapshot.ref);
@@ -1133,11 +1543,12 @@ async function uploadPendingAttachment(att, persist = true){
               try{ await saveAttachmentRecord(att.name, url, att.size, att.mime, ocrText); }catch(e){ console.warn('saveAttachmentRecord failed', e); }
               try{
                 const rec = { id: 'a_'+Date.now(), name: att.name||'anexo', url, size: Number(att.size||0), mime: att.mime||null, ocr: ocrText||null, ts: new Date().toISOString() };
-                const curRaw = localStorage.getItem('agenda_attachments');
+                const _attKey3 = getAttachmentsStorageKey();
+                const curRaw = localStorage.getItem(_attKey3);
                 let cur = [];
                 try{ cur = curRaw ? JSON.parse(curRaw) : []; }catch(e){ console.warn('parse agenda_attachments failed, resetting', e); cur = []; }
                 cur.unshift(rec);
-                localStorage.setItem('agenda_attachments', JSON.stringify(cur));
+                localStorage.setItem(_attKey3, JSON.stringify(cur));
                 try{ renderAttachmentsPanel(); }catch(e){}
                 try{ window.dispatchEvent(new Event('attachments-updated')); }catch(e){}
                 // remove pending marker from preview since it's now persisted
@@ -1152,6 +1563,24 @@ async function uploadPendingAttachment(att, persist = true){
   });
 }
 
+function getAttachmentPreviewHost(){
+  try{
+    const splash = document.getElementById('splash');
+    const splashVisible = !!(splash && splash.style.display !== 'none');
+    if(splashVisible){
+      return document.getElementById('splash-replies') || document.getElementById('bottom-replies') || document.body;
+    }
+  }catch(e){}
+  return document.getElementById('bottom-replies') || document.getElementById('splash-replies') || document.body;
+}
+
+function getAttachmentPreviewRoots(){
+  return [
+    document.getElementById('bottom-replies'),
+    document.getElementById('splash-replies')
+  ].filter(Boolean);
+}
+
 async function sendMsg(){
   // prefer bottom input when present (visible), fall back to legacy `inp`
   const bottomInput = document.getElementById('inp-bottom');
@@ -1160,8 +1589,8 @@ async function sendMsg(){
   if(!inpElem) return;
   const text = (inpElem.value || '').trim();
   // allow sending when there are completed attachments even if text is empty
-  const bottomReplies = document.getElementById('bottom-replies');
-  const previews = bottomReplies ? Array.from(bottomReplies.querySelectorAll('.attachment-preview')) : [];
+  const replyRoots = getAttachmentPreviewRoots();
+  const previews = replyRoots.reduce((all, root)=>all.concat(Array.from(root.querySelectorAll('.attachment-preview'))), []);
   const completed = previews.filter(p=> p.querySelector('.attachment-status a'));
   const uploading = previews.filter(p=> !p.querySelector('.attachment-status a'));
   const activeUploading = previews.filter(p=>{ const s = p.querySelector('.attachment-status'); return s && /Enviando/i.test((s.textContent||'')); });
@@ -1195,14 +1624,45 @@ async function sendMsg(){
             if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
             return;
           }
-          const removedNames = matched.map(m=>m.name || '—');
-          // remove them
+
+          // If the date matches a 'onlyExamDay' task, try to remove the whole exam group.
+          const examDayTasks = tasks.filter(t => t.onlyExamDay && t.date === dateTarget);
+          let removed = [];
+          if(examDayTasks.length){
+            // prefer examId grouping when present
+            const examId = examDayTasks[0].examId || null;
+            if(examId){
+              removed = tasks.filter(t => t.examId === examId);
+              tasks = tasks.filter(t => t.examId !== examId);
+            } else {
+              // fallback: remove tasks that are marked onlyExam and occur near the exam date (within 7 days)
+              const dt = new Date(dateTarget + 'T12:00:00');
+              const toRemove = [];
+              for(const t of tasks){
+                try{
+                  if(t && t.onlyExam){
+                    const td = new Date((t.date||'') + 'T12:00:00');
+                    const diff = Math.round((td.getTime() - dt.getTime())/86400000);
+                    if(Math.abs(diff) <= 7) toRemove.push(t);
+                  }
+                }catch(e){}
+              }
+              const names = toRemove.map(x=> x.name || '—');
+              removed = toRemove.slice();
+              tasks = tasks.filter(t => !(t.onlyExam && names.includes(t.name)) );
+            }
+          } else {
+            // non-exam date removal: remove tasks that fall exactly on the date
+            removed = matched.slice();
+            tasks = tasks.filter(t=>t.date!==dateTarget);
+          }
+
+          const removedNames = removed.map(m=>m.name || '—');
           // ensure the user's command isn't left in chat
           removeUserMessage(text);
-          tasks = tasks.filter(t=>t.date!==dateTarget);
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          addMsg('ai', `Removidas ${removedNames.length} tarefas em ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
-          try{ for(const r of matched){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
+          addMsg('ai', `Removidas ${removedNames.length} tarefas relacionadas a ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
+          try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
           inpElem.value=''; inpElem.style.height='42px';
           const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
           if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
@@ -1581,7 +2041,7 @@ setTimeout(()=>{
 
           // create a preview element in bottom-replies so user sees the selected file
           try{
-            const bottomReplies = document.getElementById('bottom-replies') || document.body;
+            const bottomReplies = getAttachmentPreviewHost();
             const preview = document.createElement('div'); preview.className = 'attachment-preview';
             const thumbWrap = document.createElement('div'); thumbWrap.className = 'attachment-thumbwrap';
             if(mime.startsWith('image/')){
@@ -1649,9 +2109,13 @@ setTimeout(()=>{
   try{
     const fileInput = document.getElementById('import-any-file');
     const attachBtn = document.getElementById('input-attach-btn');
+    const splashAttachBtn = document.getElementById('splash-attach-btn');
     // wire attach button inside input to open file picker
     if(attachBtn && fileInput){
       attachBtn.addEventListener('click', ()=>{ fileInput.click(); });
+    }
+    if(splashAttachBtn && fileInput){
+      splashAttachBtn.addEventListener('click', ()=>{ fileInput.click(); });
     }
   }catch(e){ console.warn('bottom action wiring', e); }
 }, 120);
@@ -1702,41 +2166,45 @@ window.triggerImportAny = triggerImportAny;
 // ── Firebase helpers (Firestore) ────────────────────────────
 async function saveToFirebase(tasksList){
   try{
-    const col = collection(window.db, 'tasks');
-    const existing = await getDocs(col);
-    const batch = writeBatch(window.db);
-    // delete existing docs
-    for(const d of existing.docs){
-      batch.delete(d.ref);
+    if (!window.auth || !window.auth.currentUser) {
+      console.warn('saveToFirebase: not authenticated, skipping');
+      return;
     }
-    // add new docs with generated ids
+    const uid = window.auth.currentUser.uid;
+    const col = getUserCollection('tasks');
+    if (!col) return;
+
+    // Write localStorage first — network failure must never lose data
+    try{ localStorage.setItem(uid + '_agenda_tasks', JSON.stringify(tasksList)); }catch(e){}
+
+    // Read existing docs to delete them (memory cache → goes to server)
+    let existingDocs = [];
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){
+      console.warn('[saveToFirebase] could not read existing docs:', e.code || e.message);
+    }
+
+    const batch = writeBatch(window.db);
+    for(const d of existingDocs) batch.delete(d.ref);
     for(const t of tasksList){
       const data = Object.assign({}, t);
-      if(data._id) delete data._id;
+      delete data._id;
       if(t._id){
-        const ref = doc(window.db, 'tasks', t._id);
-        batch.set(ref, data);
+        batch.set(doc(window.db, 'users', uid, 'tasks', t._id), data);
       } else {
-        const newRef = doc(col);
-        batch.set(newRef, data);
+        batch.set(doc(col), data);
       }
     }
     await batch.commit();
-  }catch(e){
-    const code = e && e.code ? String(e.code) : '';
-    if(code === 'permission-denied'){
-      console.warn('saveToFirebase skipped: Firestore permissions denied');
-      return;
-    }
-    console.warn('saveToFirebase', e);
-  }
+    console.log('[saveToFirebase] committed', tasksList.length, 'tasks');
+  }catch(e){ console.error('[saveToFirebase] failed:', e.code || e.message); }
 }
 
 // save an arbitrary event (non-blocking)
 async function saveEventToFirebase(type, payload){
   try{
     if(!window.db) return;
-    const col = collection(window.db, 'events');
+    const col = getUserCollection('events');
+    if (!col) return;
     await addDoc(col, { type, payload, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveEventToFirebase', e); }
 }
@@ -1847,35 +2315,22 @@ setTimeout(()=>{
   }catch(e){ console.warn('wire spinner buttons', e); }
 }, 120);
 
-async function loadFromFirebase(){
+
+// Load messages from Firestore for current user
+async function loadMessagesFromFirebase(){
   try{
-    const col   = collection(window.db, 'tasks');
-    const snap  = await getDocs(col);
-    // preserve Firestore id in _id so we can sync edits/deletes later
-    tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
-    renderCal();
-    renderTasks();
-    try{ renderSplashTasks(); }catch(e){}
-  }catch(e){
-    const code = e && e.code ? String(e.code) : '';
-    if(code === 'permission-denied'){
-      console.warn('loadFromFirebase skipped: Firestore permissions denied');
-      return;
-    }
-    console.warn('loadFromFirebase', e);
-  }
+    if (!window.auth || !window.auth.currentUser) return [];
+    const col = getUserCollection('messages');
+    if (!col) return [];
+    const snap = await getDocs(col);
+    const messages = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
+    return messages;
+  }catch(e){ console.warn('loadMessagesFromFirebase', e); return []; }
 }
+
 // If Firebase is configured, load tasks automatically from Firestore on init
-if(window.db){
-  try{
-    // only auto-load from Firebase if there are no local tasks
-    if(!tasks || tasks.length===0){
-      loadFromFirebase().catch(e=>console.warn('auto loadFromFirebase', e));
-    } else {
-      console.debug('Local tasks present; skipping auto loadFromFirebase to avoid overwriting.');
-    }
-  }catch(e){ console.warn('loadFromFirebase init', e); }
-}
+// Tasks are loaded exclusively via handleAuthStateChange → loadTasksForUser
+// after Firebase Auth resolves. No auto-load here.
 
 // ── init ──────────────────────────────────────────────────────────
 // splash control: show splash by default; user can type or skip
@@ -1933,6 +2388,29 @@ setTimeout(()=>{
 }, 60);
 renderCal();
 renderTasks();
+// if the auth state was already established before app.js loaded, ensure welcome gate runs
+function initWelcomeGateRetry(attempt = 0){
+  try{
+    if(window && window.auth && window.auth.currentUser){
+      refreshWelcomeGate(window.auth.currentUser);
+      return;
+    }
+    if(attempt < 20){
+      setTimeout(()=>initWelcomeGateRetry(attempt + 1), 150);
+    }
+  }catch(e){ console.warn('welcome gate init check failed', e); }
+}
+setTimeout(()=>initWelcomeGateRetry(0), 120);
+// wire logout modal buttons
+setTimeout(()=>{
+  try{
+    const cancelBtn = document.getElementById('logout-cancel-btn');
+    const confirmBtn = document.getElementById('logout-confirm-btn');
+    const modal = document.getElementById('logout-modal');
+    if(cancelBtn){ cancelBtn.addEventListener('click', ()=>{ if(modal) modal.classList.add('hidden'); }); }
+    if(confirmBtn){ confirmBtn.addEventListener('click', async ()=>{ try{ await window.performLogout(); }catch(e){ console.warn('performLogout click failed', e); } }); }
+  }catch(e){ console.warn('wire logout modal failed', e); }
+}, 120);
 // expõe funções usadas em handlers inline
 window.sendMsg = sendMsg;
 window.handleKey = handleKey;
@@ -1961,8 +2439,84 @@ try{
     if(!confirm('Limpar histórico local (durações e agregados)?')) return;
     // remove completion metadata from tasks
     tasks = tasks.map(t=>{ const copy = Object.assign({}, t); delete copy.actualDuration; delete copy.completedAt; return copy; });
-    localStorage.removeItem('agenda_aggregates');
+    localStorage.removeItem(getAggregatesStorageKey());
     saveTasks(); renderCal(); renderTasks();
     alert('Histórico local limpo.');
   }); }
 }catch(e){ console.warn('init learning toggle', e); }
+
+// Logout handler
+// show logout modal (actual logout performed by performLogout)
+window.handleLogout = function(){
+  const modal = document.getElementById('logout-modal'); if(!modal) return;
+  modal.classList.remove('hidden');
+}
+
+function showLoggedOutUI(){
+  try{
+    const authContainer = document.getElementById('auth-container');
+    const appElement = document.querySelector('.app');
+    const setupBanner = document.getElementById('setup-banner');
+    const bottom = document.getElementById('bottom-ia-bar');
+    const splash = document.getElementById('splash');
+    const profileModal = document.getElementById('profile-modal');
+    if(authContainer){
+      authContainer.classList.add('show');
+      authContainer.style.display = 'flex';
+    }
+    if(appElement) appElement.style.display = 'none';
+    if(setupBanner) setupBanner.style.display = 'none';
+    if(bottom) bottom.style.display = 'none';
+    if(splash) splash.style.display = 'none';
+    if(profileModal) profileModal.classList.add('hidden');
+  }catch(e){ console.warn('showLoggedOutUI', e); }
+}
+
+// perform actual logout (previous handleLogout implementation)
+window.performLogout = async function(){
+  try {
+    console.debug('performLogout: starting logout flow');
+    // Save any pending tasks before logout (only if authenticated)
+    if (tasks && tasks.length > 0) {
+      if(window.auth && window.auth.currentUser){
+        // fire-and-forget: don't block logout on network/storage latency
+        saveToFirebase(tasks).catch(e => console.warn('saveToFirebase before logout', e));
+      } else {
+        console.debug('Not authenticated — skipping Firebase save before logout');
+      }
+      try{
+        const key = getUserLocalStorageKey('agenda_tasks');
+        localStorage.setItem(key, JSON.stringify(tasks));
+      }catch(e){ console.warn('persist before logout failed', e); }
+    }
+
+    // Clear local state
+    tasks = [];
+    history = [];
+    pendingAttachments = [];
+    activeTimer = null;
+    localStorage.removeItem(getTimerStorageKey());
+    localStorage.removeItem(getAggregatesStorageKey());
+
+    // hide logout modal if open
+    try{ const modal = document.getElementById('logout-modal'); if(modal) modal.classList.add('hidden'); }catch(e){}
+
+    // Sign out - prefer the global window.signOut if present, else use imported signOut
+    try{
+      const fn = (window && window.signOut) ? window.signOut : (typeof signOut === 'function' ? signOut : null);
+      if(fn){
+        await fn(window.auth);
+        showLoggedOutUI();
+      } else {
+        console.warn('performLogout: no signOut function available');
+      }
+    }catch(e){ console.error('performLogout -> signOut failed', e); throw e; }
+
+    // ensure the UI reflects logout immediately even if auth callback is delayed
+    showLoggedOutUI();
+    try{ if(window.handleAuthStateChange) window.handleAuthStateChange(null); }catch(e){}
+  } catch (error) {
+    console.error('Logout error:', error);
+    alert('Erro ao fazer logout. Tente novamente.');
+  }
+}
