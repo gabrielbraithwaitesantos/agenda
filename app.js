@@ -1,4 +1,4 @@
-import { collection, addDoc, getDocs, getDocsFromServer, getDoc, getDocFromCache, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -558,103 +558,46 @@ async function loadTasksForUser(uid){
     }
 
     // ── Firestore fetch ──────────────────────────────────────────
-    // Strategy: race getDocsFromServer against an 8s timeout.
-    // - If server responds in time → authoritative data, update UI.
-    // - If timeout fires first → fall back to local cache or localStorage immediately,
-    //   then re-render when the server promise eventually resolves in background.
+    // With memory cache (no persistentLocalCache), getDocs() always goes to the server.
+    // Falls back to localStorage when the server is unreachable.
     let remote = null;
-    let fromServer = false;
     if(window.db && uid){
       const col = getUserCollection('tasks');
       if(col){
-        // Helper: race a promise against a timeout
-        const withTimeout = (p, ms) => Promise.race([
-          p,
-          new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))
-        ]);
-
-        // Try server with retry: first attempt after 1.5s delay (lets SDK establish WebSocket),
-        // then again at 6s. If both fail, fall back to cache then localStorage.
-        const tryServer = async () => {
-          // Short wait so the Firestore WebSocket has time to connect after login
-          await new Promise(r => setTimeout(r, 1500));
-          return withTimeout(getDocsFromServer(col), 6000);
-        };
-
-        console.log('[loadTasksForUser] fetching from Firestore server…');
-        let serverSnap = null;
         try{
-          serverSnap = await tryServer();
-        }catch(e1){
-          console.warn('[loadTasksForUser] attempt 1 failed (' + (e1.code || e1.message) + '), retrying…');
-          try{
-            serverSnap = await withTimeout(getDocsFromServer(col), 8000);
-          }catch(e2){
-            console.warn('[loadTasksForUser] attempt 2 failed (' + (e2.code || e2.message) + '), using cache…');
-          }
-        }
-
-        if(serverSnap){
-          remote = serverSnap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-          fromServer = true;
-          console.log('[loadTasksForUser] server OK —', remote.length, 'docs');
-        } else {
-          // Both server attempts failed — use local Firestore cache (instant, works offline)
-          try{
-            const snap = await getDocs(col);
-            remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            console.log('[loadTasksForUser] cache fallback —', remote.length, 'docs',
-              snap.metadata.fromCache ? '(cache)' : '(server)');
-          }catch(cacheErr){
-            console.warn('[loadTasksForUser] cache also failed:', cacheErr.code || cacheErr.message);
-          }
-          // Keep trying in background — re-render when server eventually responds
-          getDocsFromServer(col).then(snap2 => {
-            if(!snap2.docs.length) return; // server confirms empty, nothing to update
-            const fresh = snap2.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            console.log('[loadTasksForUser] background server resolved —', fresh.length, 'docs');
-            tasks = fresh;
-            try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-            computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          }).catch(()=>{});
+          console.log('[loadTasksForUser] fetching from Firestore…');
+          const snap = await getDocs(col);
+          remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          console.log('[loadTasksForUser] OK —', remote.length, 'docs');
+        }catch(e){
+          console.warn('[loadTasksForUser] Firestore failed:', e.code || e.message, '— using localStorage');
         }
       }
     }
 
-    console.log('[loadTasksForUser] summary — fromServer:', fromServer,
-      '| remote:', remote !== null ? remote.length : 'null',
-      '| local:', Array.isArray(local) ? local.length : 'null');
-
-    // Remote data available (from server or cache)
+    // Firestore responded (even with 0 docs = account is empty or genuinely new)
     if(remote !== null){
       if(remote.length > 0){
-        // Firestore has tasks — use them as source of truth
         tasks = remote;
         try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
         computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
         return;
       }
-      // Remote returned 0 docs. Two cases:
-      // a) fromServer=true → account is genuinely empty OR first-time on this device
-      //    If localStorage has tasks, push them up (migration). If not, account is empty.
-      // b) fromServer=false (cache) → anon tab with empty cache. Fall through to localStorage.
-      if(fromServer){
-        if(Array.isArray(local) && local.length){
-          console.log('[loadTasksForUser] server empty, syncing', local.length, 'local tasks up');
-          tasks = local;
-          computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-          saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
-        } else {
-          console.log('[loadTasksForUser] server confirms account is empty');
-          tasks = [];
-          computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-        }
+      // Server returned 0 docs — if localStorage has data, push it up (first-time migration)
+      if(Array.isArray(local) && local.length){
+        console.log('[loadTasksForUser] Firestore empty, pushing', local.length, 'local tasks up');
+        tasks = local;
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
         return;
       }
-      // fromServer=false, remote=0: treat as unreachable and fall through to localStorage
+      // Genuinely empty account
+      tasks = [];
+      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      return;
     }
 
-    // Firestore unreachable and no cache — use localStorage
+    // Firestore unreachable — use localStorage
     if(Array.isArray(local) && local.length){
       console.log('[loadTasksForUser] Firestore unreachable, using localStorage —', local.length, 'tasks');
       tasks = local;
@@ -2233,22 +2176,14 @@ async function saveToFirebase(tasksList){
     // Write localStorage first — network failure must never lose data
     try{ localStorage.setItem(uid + '_agenda_tasks', JSON.stringify(tasksList)); }catch(e){}
 
-    // Use server read to get existing docs so the delete list is authoritative.
-    // If server unreachable, skip the delete step — Firestore offline queue will
-    // handle the writes when connectivity resumes, and we never wipe data blindly.
+    // Read existing docs to delete them (memory cache → goes to server)
     let existingDocs = [];
-    let serverReachable = false;
-    try{
-      existingDocs = (await getDocsFromServer(col)).docs;
-      serverReachable = true;
-    }catch(e){
-      console.warn('[saveToFirebase] server unreachable, queuing writes offline:', e.code || e.message);
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){
+      console.warn('[saveToFirebase] could not read existing docs:', e.code || e.message);
     }
 
     const batch = writeBatch(window.db);
-    if(serverReachable){
-      for(const d of existingDocs) batch.delete(d.ref);
-    }
+    for(const d of existingDocs) batch.delete(d.ref);
     for(const t of tasksList){
       const data = Object.assign({}, t);
       delete data._id;
