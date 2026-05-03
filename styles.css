@@ -225,7 +225,13 @@ body {
 .section-title {
   font-size: 10px; letter-spacing: .08em;
   color: var(--muted); text-transform: uppercase;
-  font-family: var(--mono); margin-bottom: 8px;
+  font-family: var(--mono); margin-bottom: 8px; margin-top: 4px;
+}
+
+#agenda-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 /* ── task cards ── */

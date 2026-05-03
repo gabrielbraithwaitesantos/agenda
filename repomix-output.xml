@@ -314,6 +314,10 @@ const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 let tasks = [];
 // tasks are NOT loaded from localStorage at startup — they are loaded after auth in handleAuthStateChange
 
+let recipes = [];
+let currentAppTab = 'agenda'; // 'agenda' | 'culinaria'
+let __currentRecipeId = null;
+
 let vm = (new Date()).getMonth();
 let vy = (new Date()).getFullYear();
 
@@ -913,6 +917,7 @@ window.handleAuthStateChange = async function(user){
       try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
       await loadTasksForUser(user.uid);
       try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
+      await loadRecipesForUser(user.uid);
       try{
         const userMessages = await loadMessagesFromFirebase();
         if(userMessages && userMessages.length > 0){
@@ -925,6 +930,7 @@ window.handleAuthStateChange = async function(user){
     } else {
       // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
       tasks = [];
+      recipes = [];
       currentUserProfile = null;
       hideProfileModal();
       // Clear chat DOM
@@ -1461,24 +1467,40 @@ function renderTasks(){
     });
   }
 
-  // render exam-only tasks
+  // render exam tasks
   try{
     const examList = document.getElementById('exam-task-list');
     if(examList){
-      const exams = tasks.filter(t=> t && t.onlyExamDay && !t.completedAt).sort((a,b)=> a.date>b.date?1:-1).slice(0,8);
-      if(!exams.length) examList.innerHTML = '<div class="no-tasks">Nenhuma tarefa de prova</div>'; else {
+      const seen = new Set();
+      const exams = tasks
+        .filter(t => t && !t.completedAt && t.onlyExamDay)
+        .sort((a, b) => a.date > b.date ? 1 : -1)
+        .filter(t => {
+          const key = (t.name || '') + '_' + (t.date || '');
+          if(seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 8);
+      if(!exams.length){
+        examList.innerHTML = '<div class="no-tasks">Nenhuma prova pendente</div>';
+      } else {
         examList.innerHTML = '';
-        exams.forEach(t=>{
+        exams.forEach(t => {
           const i = tasks.indexOf(t);
-          const item = document.createElement('div'); item.className='task-card small';
-          item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
-          const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
-          const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
-          const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
-          const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
-          const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
-          actions.appendChild(openBtn); actions.appendChild(createBtn);
+          const item = document.createElement('div'); item.className = 'task-card small';
+          item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+          const left = document.createElement('div'); left.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+          const name = document.createElement('strong'); name.style.fontSize = '13px'; name.textContent = t.name || '—';
+          const meta = document.createElement('div'); meta.className = 'meta';
+          const dateFormatted = t.date ? t.date.split('-').reverse().slice(0,2).join('/') : '';
+          meta.textContent = dateFormatted + (t.time ? ' · ' + t.time : '');
+          left.appendChild(name); left.appendChild(meta);
+          const actions = document.createElement('div'); actions.style.cssText = 'display:flex;gap:8px;';
+          const openBtn = document.createElement('button'); openBtn.className = 'cal-nav small'; openBtn.textContent = 'Abrir';
+          openBtn.onclick = () => { showDatePopover(t.date); };
+          const editBtn = document.createElement('button'); editBtn.className = 'cal-nav small'; editBtn.textContent = 'Editar';
+          editBtn.onclick = () => { editTask(i); };
+          actions.appendChild(openBtn); actions.appendChild(editBtn);
           item.appendChild(left); item.appendChild(actions);
           examList.appendChild(item);
         });
@@ -1532,10 +1554,6 @@ function renderTasks(){
       }
       return;
     }
-    // debug panel: show counts and first names so user can see what's loaded (only if pending tasks exist)
-    let dbg = document.createElement('div'); dbg.id = 'splash-debug'; dbg.style.fontSize='12px'; dbg.style.color='var(--muted)'; dbg.style.marginTop='8px';
-    try{ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length} — primeiras: ${pending.slice(0,4).map(p=>p.name||'—').join(' | ')}`; }catch(e){ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length}`; }
-    el.parentNode.insertBefore(dbg, el.nextSibling);
     pending.forEach(t=>{
       const i = tasks.indexOf(t);
       const item = document.createElement('div'); item.className = 'splash-task';
@@ -1654,7 +1672,6 @@ function addMsg(role, text){
       const safeText2 = (text === null || text === undefined) ? '' : String(text);
       spr.innerHTML = `<div class="bubble">${safeText2.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;
       splashReplies.appendChild(spr);
-      splashReplies.scrollTop = splashReplies.scrollHeight;
     }
   }catch(e){}
 
@@ -1909,9 +1926,11 @@ async function sendMsg(){
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
     // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
-    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tirar?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
     if(delMatch){
       const target = delMatch[1].trim();
+      const verbUsed = text.match(/^(?:pode\s+|quero\s+|por\s+favor\s+)?(exclu\w*|remov\w*|apag\w*|delet\w*|tirar?)/i);
+      const isTirar = verbUsed && /^tirar?$/i.test(verbUsed[1]);
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
       try{
         const dateTarget = parsePortugueseDate(target);
@@ -1975,7 +1994,8 @@ async function sendMsg(){
       }catch(e){ console.warn('date-removal error', e); }
       // try match by exact or partial name using normalized comparison (ignore accents/punctuation/case)
       const norm = normalizeName(target);
-      const candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+      // "tirar" é ambíguo — só remove por data pura, nunca por correspondência de nome
+      const candidates = isTirar ? [] : tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
       if(candidates.length===0){
           // No matching task found — fall through to AI so natural phrases like
           // "tirar o lixo amanhã" are treated as task additions, not failed deletions.
@@ -2108,6 +2128,14 @@ async function sendMsg(){
     if(sendBtn) sendBtn.disabled = false;
     return;
   }
+  // ─── Culinária mode: delegate to culinaria handler ───────────────
+  if(currentAppTab === 'culinaria'){
+    await sendCulinariaMsg(text);
+    if(sendBtn) sendBtn.disabled = false;
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────
+
   const thinking = addThinking();
 
   // sem chave configurada → mensagem de ajuda
@@ -2142,7 +2170,7 @@ Contexto histórico (opcional):\n${aggSummary}
 Regras importantes de comportamento:
 - Nunca interprete uma mensagem que contenha apenas um ou poucos dígitos (por exemplo: "1", "2") como uma seleção de menu automática. Se o usuário enviar apenas um número, trate isso como texto ambíguo e peça um pequeno esclarecimento antes de executar qualquer ação.
 - Não solicite que o usuário responda escolhendo números. Prefira instruções em texto ou passos em linhas separadas.
-- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Se o usuário pedir para remover/excluir/apagar uma tarefa, responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
+- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Essa instrução se aplica SOMENTE quando o usuário usar explicitamente as palavras "remover", "excluir", "apagar" ou "deletar". A palavra "tirar" NUNCA é um pedido de remoção — pode significar "fazer uma prova", "tirar foto", "tirar uma dúvida", etc. Quando for um pedido claro de remoção (usando remover/excluir/apagar/deletar), responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
 
 Seu trabalho:
 1. Entender o que precisa ser feito
@@ -2184,8 +2212,16 @@ ${tasksSummary}`;
     if(data.error){ throw new Error(data.error.message); }
 
     const full   = data.choices[0].message.content;
-    const parts  = full.split('---JSON---');
+    const normalized = full
+      .replace(/---\s*JSON\s*---/gi, '---JSON---')
+      .replace(/```json[\s\S]*?```/g, (match) => '---JSON---' + match.replace(/```json\s*/, '').replace(/\s*```$/, ''));
+    const parts  = normalized.split('---JSON---');
     const reply  = parts[0].trim();
+    const cleanReply = reply
+      .replace(/\[\s*\]/g, '')
+      .replace(/^\s*-{3,}\s*$/gm, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
     let newTasks = [];
 
     if(parts[1]){
@@ -2197,9 +2233,9 @@ ${tasksSummary}`;
 
     thinking.remove();
     history.push({role:'assistant', content: full});
-    addMsg('ai', reply);
+    addMsg('ai', cleanReply);
     // save assistant reply
-    saveMessageToFirebase('assistant', reply);
+    saveMessageToFirebase('assistant', cleanReply);
     saveLearningRecord('message', { role:'assistant', text: reply });
 
     if(newTasks.length){
@@ -2497,6 +2533,291 @@ async function saveToFirebase(tasksList){
   }catch(e){ console.error('[saveToFirebase] failed:', e.code || e.message); }
 }
 
+// ── Culinária: tab switching ─────────────────────────────────────
+window.switchAppTab = function(tab){
+  currentAppTab = tab;
+  const agendaView = document.getElementById('agenda-view');
+  const culinariaView = document.getElementById('culinaria-view');
+  const isCulinaria = tab === 'culinaria';
+
+  // app tabs (main panel)
+  document.getElementById('tab-agenda')?.classList.toggle('active', !isCulinaria);
+  document.getElementById('tab-culinaria')?.classList.toggle('active', isCulinaria);
+
+  // splash tabs
+  document.getElementById('splash-tab-agenda')?.classList.toggle('active', !isCulinaria);
+  document.getElementById('splash-tab-culinaria')?.classList.toggle('active', isCulinaria);
+
+  const agendaPlaceholder = 'Ex: estudar ciberfísico sexta 17:30';
+  const culinariaPlaceholder = 'Ex: hoje fiz frango grelhado com limão, ficou pronto em 30 min';
+  const placeholder = isCulinaria ? culinariaPlaceholder : agendaPlaceholder;
+
+  const inpBottom = document.getElementById('inp-bottom');
+  const inpSplash = document.getElementById('splash-inp');
+  if(inpBottom) inpBottom.placeholder = placeholder;
+  if(inpSplash) inpSplash.placeholder = placeholder;
+
+  if(isCulinaria){
+    if(agendaView) agendaView.style.display = 'none';
+    if(culinariaView) culinariaView.style.display = 'flex';
+    renderRecipeList();
+  } else {
+    if(agendaView) agendaView.style.display = '';
+    if(culinariaView) culinariaView.style.display = 'none';
+  }
+};
+
+// ── Culinária: persistence ────────────────────────────────────────
+async function loadRecipesForUser(uid){
+  try{
+    recipes = [];
+    const key = uid ? (uid + '_agenda_recipes') : 'agenda_recipes';
+    let local = null;
+    try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
+
+    let remote = null;
+    if(window.db && uid){
+      const col = collection(window.db, 'users', uid, 'recipes');
+      try{
+        const snap = await getDocs(col);
+        remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+      }catch(e){ console.warn('[loadRecipesForUser] Firestore failed:', e.code || e.message); }
+    }
+
+    if(remote !== null){
+      if(remote.length > 0){
+        recipes = remote;
+        try{ localStorage.setItem(key, JSON.stringify(recipes)); }catch(e){}
+        renderRecipeList(); return;
+      }
+      if(Array.isArray(local) && local.length){
+        recipes = local;
+        saveToFirebaseRecipes(recipes).catch(e=>console.warn('initial recipe sync failed', e));
+        renderRecipeList(); return;
+      }
+      recipes = []; renderRecipeList(); return;
+    }
+    if(Array.isArray(local) && local.length){ recipes = local; }
+    renderRecipeList();
+  }catch(e){ console.warn('[loadRecipesForUser]', e); recipes = []; renderRecipeList(); }
+}
+
+function saveRecipes(){
+  try{
+    const uid = window.auth && window.auth.currentUser && window.auth.currentUser.uid;
+    const key = uid ? (uid + '_agenda_recipes') : 'agenda_recipes';
+    localStorage.setItem(key, JSON.stringify(recipes));
+  }catch(e){ console.warn('saveRecipes localStorage', e); }
+  if(window.db){
+    saveToFirebaseRecipes(recipes).catch(e=>console.error('saveRecipes->Firestore', e));
+  }
+  renderRecipeList();
+}
+
+async function saveToFirebaseRecipes(recipesList){
+  try{
+    if(!window.auth || !window.auth.currentUser) return;
+    const uid = window.auth.currentUser.uid;
+    const col = collection(window.db, 'users', uid, 'recipes');
+    let existingDocs = [];
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){ console.warn('[saveToFirebaseRecipes] read failed', e.code||e.message); }
+    const batch = writeBatch(window.db);
+    for(const d of existingDocs) batch.delete(d.ref);
+    for(const r of recipesList){
+      const data = Object.assign({}, r); delete data._id;
+      if(r._id){ batch.set(doc(window.db, 'users', uid, 'recipes', r._id), data); }
+      else { batch.set(doc(col), data); }
+    }
+    await batch.commit();
+  }catch(e){ console.error('[saveToFirebaseRecipes]', e.code||e.message); }
+}
+
+// ── Culinária: render ─────────────────────────────────────────────
+function renderRecipeList(filterText){
+  const container = document.getElementById('recipe-list');
+  if(!container) return;
+  const query = (filterText || '').toLowerCase().trim();
+  const list = query
+    ? recipes.filter(r=> (r.name||'').toLowerCase().includes(query) || (r.tags||[]).some(t=>t.toLowerCase().includes(query)))
+    : recipes;
+  if(!list.length){
+    container.innerHTML = '<div class="no-tasks">Nenhuma receita ainda. Descreva um prato no chat!</div>';
+    return;
+  }
+  container.innerHTML = '';
+  list.forEach(r=>{
+    const card = document.createElement('div'); card.className = 'recipe-card';
+    const info = document.createElement('div'); info.className = 'recipe-card-info';
+    const name = document.createElement('div'); name.className = 'recipe-card-name'; name.textContent = r.name || '—';
+    const meta = document.createElement('div'); meta.className = 'recipe-card-meta';
+    const parts = [];
+    if(r.prepTime) parts.push('⏱ ' + r.prepTime + ' min');
+    if(r.history && r.history.length) parts.push('🍴 feito ' + r.history.length + 'x');
+    meta.textContent = parts.join(' · ');
+    info.appendChild(name); info.appendChild(meta);
+    if(r.tags && r.tags.length){
+      const tagWrap = document.createElement('div'); tagWrap.className = 'recipe-tags';
+      r.tags.slice(0,5).forEach(t=>{ const tag = document.createElement('span'); tag.className='recipe-tag'; tag.textContent=t; tagWrap.appendChild(tag); });
+      info.appendChild(tagWrap);
+    }
+    const btn = document.createElement('button'); btn.className='cal-nav small'; btn.textContent='Ver receita';
+    btn.addEventListener('click', ()=> openRecipeModal(r.id || r._id));
+    card.appendChild(info); card.appendChild(btn);
+    container.appendChild(card);
+  });
+}
+window.filterRecipes = function(val){ renderRecipeList(val); };
+
+function openRecipeModal(recipeId){
+  const r = recipes.find(x=> (x.id||x._id) === recipeId);
+  if(!r) return;
+  __currentRecipeId = recipeId;
+  const nameEl = document.getElementById('recipe-modal-name');
+  const bodyEl = document.getElementById('recipe-modal-body');
+  if(nameEl) nameEl.textContent = r.name || '—';
+  if(bodyEl){
+    let html = '';
+    if(r.prepTime) html += `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">⏱ ${r.prepTime} min de preparo</div>`;
+    if(r.ingredients && r.ingredients.length){
+      html += '<div class="recipe-section-title">Ingredientes</div>';
+      html += '<ul class="recipe-modal-list">' + r.ingredients.map(i=>`<li>${i}</li>`).join('') + '</ul>';
+    }
+    if(r.steps && r.steps.length){
+      html += '<div class="recipe-section-title">Modo de Preparo</div>';
+      html += '<ol class="recipe-modal-list">' + r.steps.map(s=>`<li>${s}</li>`).join('') + '</ol>';
+    }
+    if(r.notes){
+      html += '<div class="recipe-section-title">Observações</div>';
+      html += `<div style="font-size:13px;color:var(--text);padding:8px;border-radius:6px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.02)">${r.notes}</div>`;
+    }
+    if(r.tags && r.tags.length){
+      html += '<div class="recipe-section-title">Tags</div>';
+      html += '<div class="recipe-tags">' + r.tags.map(t=>`<span class="recipe-tag">${t}</span>`).join('') + '</div>';
+    }
+    if(r.history && r.history.length){
+      html += '<div class="recipe-section-title">Histórico</div>';
+      html += r.history.map(h=>`<div class="recipe-history-item"><strong>${h.date||''}</strong>${h.obs? ' — '+h.obs : ''}</div>`).join('');
+    }
+    bodyEl.innerHTML = html;
+  }
+  const modal = document.getElementById('recipe-modal');
+  if(modal) modal.classList.remove('hidden');
+}
+window.openRecipeModal = openRecipeModal;
+
+window.closeRecipeModal = function(){
+  const modal = document.getElementById('recipe-modal');
+  if(modal) modal.classList.add('hidden');
+  __currentRecipeId = null;
+};
+
+window.deleteCurrentRecipe = function(){
+  if(!__currentRecipeId) return;
+  const idx = recipes.findIndex(r=> (r.id||r._id) === __currentRecipeId);
+  if(idx === -1) return;
+  const name = recipes[idx].name;
+  recipes.splice(idx, 1);
+  saveRecipes();
+  window.closeRecipeModal();
+  addMsg('ai', `Receita "${name}" removida.`);
+};
+
+// ── Culinária: system prompt builder ─────────────────────────────
+function buildRecipesSummary(){
+  if(!recipes.length) return 'Nenhuma receita salva ainda.';
+  return recipes.slice(0,20).map(r=>{
+    const tags = (r.tags||[]).join(', ');
+    return `- ${r.name}${r.prepTime? ' ('+r.prepTime+' min)' : ''}${tags? ' • '+tags : ''}`;
+  }).join('\n');
+}
+
+function buildCulinariaSystemPrompt(){
+  return `Você é um assistente de culinária conversacional. O usuário descreve em linguagem natural receitas que fez ou quer salvar.
+
+Receitas já salvas:
+${buildRecipesSummary()}
+
+Seu trabalho:
+1. Entender o prato descrito
+2. Extrair ingredientes, modo de preparo e tempo de preparo
+3. Confirmar o que entendeu de forma amigável
+4. Se o usuário mencionar como ficou ou observações, inclua no histórico
+
+Responda em dois blocos separados exatamente por ---RECIPE---
+
+BLOCO 1: resposta amigável em português. Máximo 5 linhas.
+- Confirme o nome do prato
+- Destaque algo legal da receita
+- Tom direto e descontraído
+
+BLOCO 2 (após ---RECIPE---): objeto JSON da receita:
+{"name":"Nome do prato","ingredients":["ingrediente 1","ingrediente 2"],"steps":["Passo 1...","Passo 2..."],"prepTime":30,"tags":["tag1","tag2"],"notes":"Observações opcionais","historyEntry":"Como ficou desta vez (se mencionado)"}
+Se não houver receita para salvar, retorne null no lugar do JSON.`;
+}
+
+// ── Culinária: send message handler ──────────────────────────────
+async function sendCulinariaMsg(text){
+  const thinking = addThinking();
+  if(!window.GROQ_API_KEY || window.GROQ_API_KEY==='COLE_SUA_CHAVE_GROQ_AQUI'){
+    thinking.remove();
+    addMsg('ai','⚠️ Chave Groq não configurada. Configure GROQ_API_KEY.');
+    return;
+  }
+  try{
+    const system = buildCulinariaSystemPrompt();
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+window.GROQ_API_KEY },
+      body: JSON.stringify({ model: window.GROQ_MODEL, messages:[{role:'system',content:system},{role:'user',content:text}], temperature:0.5, max_tokens:900 })
+    });
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error.message);
+    const full = data.choices[0].message.content;
+    const parts = full.split('---RECIPE---');
+    const reply = parts[0].trim();
+    let newRecipe = null;
+    if(parts[1]){
+      try{
+        const raw = parts[1].trim().replace(/```json|```/g,'').trim();
+        if(raw !== 'null') newRecipe = JSON.parse(raw);
+      }catch(e){ console.warn('recipe JSON parse failed', e); }
+    }
+    thinking.remove();
+    addMsg('ai', reply);
+    if(newRecipe && newRecipe.name){
+      const existing = recipes.find(r=> r.name.toLowerCase() === newRecipe.name.toLowerCase());
+      if(existing){
+        if(newRecipe.historyEntry){
+          existing.history = existing.history || [];
+          existing.history.push({ date: todayStr(), obs: newRecipe.historyEntry });
+        }
+        if(newRecipe.ingredients && newRecipe.ingredients.length) existing.ingredients = newRecipe.ingredients;
+        if(newRecipe.steps && newRecipe.steps.length) existing.steps = newRecipe.steps;
+        if(newRecipe.prepTime) existing.prepTime = newRecipe.prepTime;
+        if(newRecipe.notes) existing.notes = newRecipe.notes;
+      } else {
+        const rec = {
+          id: 'r_' + Date.now(),
+          name: newRecipe.name,
+          ingredients: newRecipe.ingredients || [],
+          steps: newRecipe.steps || [],
+          prepTime: newRecipe.prepTime || null,
+          tags: newRecipe.tags || [],
+          notes: newRecipe.notes || '',
+          history: newRecipe.historyEntry ? [{ date: todayStr(), obs: newRecipe.historyEntry }] : [],
+          createdAt: new Date().toISOString()
+        };
+        recipes.unshift(rec);
+      }
+      saveRecipes();
+      addMsg('ai', `✅ Receita "${newRecipe.name}" salva!`);
+    }
+  }catch(err){
+    thinking.remove();
+    addMsg('ai','Erro ao conectar com a IA: '+ String(err.message||err));
+  }
+}
+
 // save an arbitrary event (non-blocking)
 async function saveEventToFirebase(type, payload){
   try{
@@ -2790,6 +3111,7 @@ window.performLogout = async function(){
 
     // Clear local state
     tasks = [];
+    recipes = [];
     history = [];
     pendingAttachments = [];
     activeTimer = null;
@@ -3188,27 +3510,23 @@ service cloud.firestore {
 <!-- SPLASH (aparece ao entrar) -->
 <div id="splash" class="splash-overlay">
   <div class="splash-card">
-    <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
     <div class="splash-header">
       <div class="logo">💬</div>
       <h2 id="splash-greeting">Bem-vindo moreno</h2>
+      <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
     </div>
-    <div class="splash-body">
-      <div class="splash-msg">O que temos pra hoje?</div>
-      <textarea id="splash-inp" placeholder="Ex: prova de ciberfísico sexta às 17h30..."></textarea>
-      <div id="splash-tasks" class="splash-tasks"></div>
-      <div id="splash-replies" class="splash-replies"></div>
+    <div class="splash-tabs">
+      <button class="splash-tab active" id="splash-tab-agenda" onclick="switchAppTab('agenda')">📋 Agenda</button>
+      <button class="splash-tab" id="splash-tab-culinaria" onclick="switchAppTab('culinaria')">🍳 Culinária</button>
     </div>
+    <textarea id="splash-inp" placeholder="Ex: prova de ciberfísico sexta às 17h30..."></textarea>
     <div class="splash-actions">
-      <button type="button" class="cal-nav splash-attach" id="splash-attach-btn" aria-label="Anexar arquivo">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-          <path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2.5 2.5 0 0 1-3.54-3.54l7.07-7.07" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-        <span>Anexar</span>
-      </button>
       <button class="cal-nav" id="splash-account-btn" onclick="openAccountPanel()">Minha conta</button>
-      <button class="cal-nav" id="splash-send-btn">Enviar</button>
+      <button class="cal-nav splash-send" id="splash-send-btn">Enviar</button>
     </div>
+    <!-- referências mantidas para o JS, fora da view -->
+    <div id="splash-tasks" style="display:none"></div>
+    <div id="splash-replies" style="display:none"></div>
   </div>
 </div>
 
@@ -3310,6 +3628,15 @@ service cloud.firestore {
   <!-- RIGHT PANEL -->
   <div class="right-col">
 
+    <!-- App navigation tabs -->
+    <div id="app-tabs">
+      <button id="tab-agenda" class="app-tab active" onclick="switchAppTab('agenda')">📋 Agenda</button>
+      <button id="tab-culinaria" class="app-tab" onclick="switchAppTab('culinaria')">🍳 Culinária</button>
+    </div>
+
+    <!-- Agenda view -->
+    <div id="agenda-view">
+
     <!-- toolbar -->
     <div class="app-toolbar">
       <button type="button" class="cal-nav" onclick="exportPDF()">Exportar PDF</button>
@@ -3380,6 +3707,19 @@ service cloud.firestore {
       </div>
     </div>
 
+    </div><!-- end #agenda-view -->
+
+    <!-- Culinária view -->
+    <div id="culinaria-view" style="display:none;flex-direction:column;gap:16px;">
+      <div>
+        <div class="section-title" style="margin-bottom:8px">Minhas Receitas</div>
+        <input id="recipe-search" type="text" placeholder="Buscar receita por nome..." oninput="filterRecipes(this.value)" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg3);color:var(--text);font-family:var(--font);font-size:13px;outline:none">
+      </div>
+      <div id="recipe-list" style="display:flex;flex-direction:column;gap:8px;">
+        <div class="no-tasks">Nenhuma receita ainda. Descreva um prato no chat!</div>
+      </div>
+    </div>
+
   </div>
 </div>
 
@@ -3437,6 +3777,18 @@ service cloud.firestore {
     </div>
   </div>
 </div>
+<!-- recipe detail modal -->
+<div id="recipe-modal" class="hidden">
+  <div class="modal-card" style="width:min(520px,94vw)">
+    <h3 id="recipe-modal-name" style="margin-bottom:12px"></h3>
+    <div id="recipe-modal-body"></div>
+    <div class="modal-actions">
+      <button class="cal-nav" onclick="closeRecipeModal()">Fechar</button>
+      <button class="cal-nav" style="background:rgba(245,99,66,0.12);border-color:rgba(245,99,66,0.3);color:#ff6b5b" onclick="deleteCurrentRecipe()">Excluir</button>
+    </div>
+  </div>
+</div>
+
 <!-- logout modal (replace native confirm) -->
 <div id="logout-modal" class="hidden">
   <div class="modal-card">
@@ -3789,7 +4141,13 @@ body {
 .section-title {
   font-size: 10px; letter-spacing: .08em;
   color: var(--muted); text-transform: uppercase;
-  font-family: var(--mono); margin-bottom: 8px;
+  font-family: var(--mono); margin-bottom: 8px; margin-top: 4px;
+}
+
+#agenda-view {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
 }
 
 /* ── task cards ── */
@@ -3946,18 +4304,9 @@ body {
   .stat-val { font-size: 16px; }
 
   /* splash */
-  .splash-card {
-    width: 97%;
-    padding: 14px 12px;
-  }
+  .splash-card { width: 96%; padding: 16px 14px 14px; gap: 12px; }
   .splash-header h2 { font-size: 15px; }
-  .splash-actions {
-    gap: 6px;
-  }
-  .splash-actions .cal-nav {
-    padding: 8px 10px;
-    font-size: 13px;
-  }
+  .splash-actions .cal-nav { padding: 8px 12px; font-size: 13px; }
 
   /* modals */
   .modal-card {
@@ -4116,27 +4465,76 @@ body {
 }
 
 /* SPLASH styles */
-#splash.splash-overlay { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: linear-gradient(180deg, rgba(2,8,23,0.8), rgba(2,8,23,0.95)); z-index: 1200; }
-.splash-card { position: relative; width: min(720px,94%); max-width: 720px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border: 1px solid rgba(255,255,255,0.03); border-radius: 14px; padding: 18px; box-shadow: 0 30px 80px rgba(2,8,23,0.7); transform: translateY(18px); animation: splash-in .45s cubic-bezier(.2,.9,.2,1);
+#splash.splash-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, rgba(2,8,23,0.82), rgba(2,8,23,0.96));
+  z-index: 1200;
 }
-.splash-header { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
-.splash-header .logo { width:44px; height:44px; display:flex; align-items:center; justify-content:center; border-radius:10px; background: linear-gradient(135deg,var(--accent),var(--accent2)); box-shadow: 0 8px 28px rgba(79,142,247,0.12); font-size:18px; }
-.splash-header h2 { font-size:18px; margin:0; }
-.splash-body { margin-bottom:12px; }
-.splash-body .splash-msg { color: var(--muted); margin-bottom:10px; }
-.splash-body textarea { width:100%; min-height:64px; max-height:160px; resize:none; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); color:var(--text); font-family:var(--font); }
-.splash-actions { display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
-.splash-actions .cal-nav { padding:10px 14px; border-radius:10px; }
-.splash-attach { display:inline-flex; align-items:center; gap:8px; }
-.splash-attach svg { flex-shrink:0; }
-.splash-replies { margin-top:10px; display:flex; flex-direction:column; gap:8px; max-height:160px; overflow:auto; }
 
-/* small circular close button positioned at top-right of splash card */
-.splash-close { position: absolute; top: 10px; right: 10px; width:36px; height:36px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:50%; font-size:14px; background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); }
-.splash-close:hover { background: rgba(255,255,255,0.04); }
+.splash-card {
+  width: min(520px, 92%);
+  background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  box-shadow: 0 32px 80px rgba(2,8,23,0.75), 0 0 0 1px rgba(79,142,247,0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: splash-in .4s cubic-bezier(.2,.9,.2,1);
+}
 
-/* splash pending tasks */
-.splash-tasks { margin-top:10px; display:flex; flex-direction:column; gap:8px; max-height:160px; overflow:auto; }
+.splash-header {
+  display: flex; align-items: center; gap: 12px;
+}
+.splash-header .logo { width:36px; height:36px; display:flex; align-items:center; justify-content:center; border-radius:10px; background: linear-gradient(135deg,var(--accent),var(--accent2)); box-shadow: 0 6px 18px rgba(79,142,247,0.18); font-size:16px; flex-shrink:0; }
+.splash-header h2 { font-size:16px; font-weight:500; margin:0; flex:1; }
+.splash-close { background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; cursor:pointer; flex-shrink:0; padding:0; color:var(--muted); transition: background .12s; }
+.splash-close:hover { background: rgba(255,255,255,0.07); color:var(--text); }
+
+.splash-tabs {
+  display: flex;
+  gap: 6px;
+}
+.splash-tab {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.02);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.splash-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.splash-tab.active {
+  background: rgba(79,142,247,0.12);
+  border-color: rgba(79,142,247,0.25);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.splash-card textarea {
+  width:100%; min-height:72px; max-height:160px;
+  resize:none; padding:12px 14px; border-radius:12px;
+  border:1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+  color:var(--text); font-family:var(--font); font-size:14px; line-height:1.5;
+  transition: border-color .15s, box-shadow .15s;
+}
+.splash-card textarea:focus { outline:none; border-color:rgba(79,142,247,0.35); box-shadow: 0 8px 24px rgba(79,142,247,0.07); }
+.splash-card textarea::placeholder { color: var(--muted); }
+
+.splash-actions { display:flex; justify-content:flex-end; gap:8px; align-items:center; }
+.splash-actions .cal-nav { padding:8px 16px; border-radius:10px; font-size:13px; }
+.splash-send { background: linear-gradient(135deg,var(--accent),var(--accent2)) !important; border-color: transparent !important; color: white !important; font-weight:500 !important; box-shadow: 0 4px 14px rgba(79,142,247,0.3); }
+.splash-send:hover { opacity:.9; }
+
+/* kept hidden for JS compat */
+.splash-tasks, .splash-replies { display:none !important; }
 .splash-task { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background: rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.02); border-radius:8px; }
 .splash-task-row { display:flex; flex-direction:column; gap:4px; }
 .splash-task-name { font-weight:600; font-size:14px; color:var(--text); }
@@ -4157,6 +4555,99 @@ body {
   max-height: 90dvh;
   overflow-y: auto;
 }
+/* ── app tabs ── */
+#app-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 0 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.app-tab {
+  padding: 6px 16px;
+  border-radius: 8px 8px 0 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  margin-bottom: -1px;
+}
+
+.app-tab:hover { color: var(--text); }
+
+.app-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: rgba(79, 142, 247, 0.06);
+}
+
+/* ── recipe cards ── */
+.recipe-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));
+  border: 1px solid rgba(255,255,255,0.02);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  transition: box-shadow .12s, transform .08s;
+}
+.recipe-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,0.5); }
+.recipe-card-info { flex: 1; min-width: 0; }
+.recipe-card-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.recipe-card-meta { font-size: 12px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+.recipe-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.recipe-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(79,142,247,0.12);
+  color: var(--accent);
+}
+
+/* recipe modal body */
+.recipe-section-title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-family: var(--mono);
+  margin: 12px 0 6px;
+}
+.recipe-modal-list {
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.recipe-history-item {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.02);
+  margin-bottom: 4px;
+}
+
+/* recipe modal positioning */
+#recipe-modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2,8,23,0.85);
+  z-index: 1300;
+  padding: 16px;
+}
+#recipe-modal.hidden { display: none; }
+
 #complete-modal, #logout-modal, #edit-task-modal {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;

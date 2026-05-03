@@ -991,6 +991,12 @@ function deleteTaskAttachment(task){
   const urls = [];
   if(task.attachment) urls.push(task.attachment);
   if(Array.isArray(task.attachments)) task.attachments.forEach(u=>{ if(u && !urls.includes(u)) urls.push(u); });
+  // remove from local attachments panel by URL match
+  try{
+    const cur = loadLocalAttachments();
+    const filtered = cur.filter(a => !urls.includes(a.url));
+    if(filtered.length !== cur.length){ saveLocalAttachments(filtered); renderAttachmentsPanel(); }
+  }catch(e){}
   if(!urls.length) return;
   try{
     const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
@@ -1127,9 +1133,10 @@ function renderTasks(){
   // upcoming: future or today tasks that are not completed
   const upcoming = visible.filter(t=>!t.completedAt && t.date>=td).sort((a,b)=>a.date>b.date?1:-1).slice(0,6);
 
+  const pending = visible.filter(t => !t.completedAt && t.date >= td);
   const statTotal = document.getElementById('stat-total');
-  if(statTotal) statTotal.textContent = visible.length;
-  const totalMin = visible.reduce((s,t)=>s+(t.est||0),0);
+  if(statTotal) statTotal.textContent = pending.length;
+  const totalMin = pending.reduce((s,t)=>s+(t.est||0),0);
   const statTime = document.getElementById('stat-time');
   if(statTime) statTime.textContent = totalMin
     ? (totalMin>=60 ? (Math.round(totalMin/6)/10)+'h' : totalMin+'min')
@@ -1186,24 +1193,40 @@ function renderTasks(){
     });
   }
 
-  // render exam-only tasks
+  // render exam tasks
   try{
     const examList = document.getElementById('exam-task-list');
     if(examList){
-      const exams = tasks.filter(t=> t && t.onlyExamDay && !t.completedAt).sort((a,b)=> a.date>b.date?1:-1).slice(0,8);
-      if(!exams.length) examList.innerHTML = '<div class="no-tasks">Nenhuma tarefa de prova</div>'; else {
+      const seen = new Set();
+      const exams = tasks
+        .filter(t => t && !t.completedAt && t.onlyExamDay && t.date >= td)
+        .sort((a, b) => a.date > b.date ? 1 : -1)
+        .filter(t => {
+          const key = (t.name || '') + '_' + (t.date || '');
+          if(seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        }).slice(0, 8);
+      if(!exams.length){
+        examList.innerHTML = '<div class="no-tasks">Nenhuma prova pendente</div>';
+      } else {
         examList.innerHTML = '';
-        exams.forEach(t=>{
+        exams.forEach(t => {
           const i = tasks.indexOf(t);
-          const item = document.createElement('div'); item.className='task-card small';
-          item.style.display='flex'; item.style.justifyContent='space-between'; item.style.alignItems='center';
-          const left = document.createElement('div'); left.style.display='flex'; left.style.flexDirection='column';
-          const name = document.createElement('strong'); name.textContent = t.name; left.appendChild(name);
-          const meta = document.createElement('div'); meta.className='meta'; meta.textContent = (t.date? t.date.split('-').reverse().slice(0,2).join('/') : '') + (t.time? ' · '+t.time : '');
-          const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='8px';
-          const openBtn = document.createElement('button'); openBtn.className='cal-nav small'; openBtn.textContent='Abrir'; openBtn.onclick = ()=>{ showDatePopover(t.date); };
-          const createBtn = document.createElement('button'); createBtn.className='cal-nav small'; createBtn.textContent='Editar'; createBtn.onclick = ()=>{ editTask(i); };
-          actions.appendChild(openBtn); actions.appendChild(createBtn);
+          const item = document.createElement('div'); item.className = 'task-card small';
+          item.style.cssText = 'display:flex;justify-content:space-between;align-items:center;';
+          const left = document.createElement('div'); left.style.cssText = 'display:flex;flex-direction:column;gap:2px;';
+          const name = document.createElement('strong'); name.style.fontSize = '13px'; name.textContent = t.name || '—';
+          const meta = document.createElement('div'); meta.className = 'meta';
+          const dateFormatted = t.date ? t.date.split('-').reverse().slice(0,2).join('/') : '';
+          meta.textContent = dateFormatted + (t.time ? ' · ' + t.time : '');
+          left.appendChild(name); left.appendChild(meta);
+          const actions = document.createElement('div'); actions.style.cssText = 'display:flex;gap:8px;';
+          const openBtn = document.createElement('button'); openBtn.className = 'cal-nav small'; openBtn.textContent = 'Abrir';
+          openBtn.onclick = () => { showDatePopover(t.date); };
+          const editBtn = document.createElement('button'); editBtn.className = 'cal-nav small'; editBtn.textContent = 'Editar';
+          editBtn.onclick = () => { editTask(i); };
+          actions.appendChild(openBtn); actions.appendChild(editBtn);
           item.appendChild(left); item.appendChild(actions);
           examList.appendChild(item);
         });
@@ -1629,15 +1652,17 @@ async function sendMsg(){
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
     // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
-    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tirar?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
     if(delMatch){
       const target = delMatch[1].trim();
+      const verbUsed = text.match(/^(?:pode\s+|quero\s+|por\s+favor\s+)?(exclu\w*|remov\w*|apag\w*|delet\w*|tirar?)/i);
+      const isTirar = verbUsed && /^tirar?$/i.test(verbUsed[1]);
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
       try{
         const dateTarget = parsePortugueseDate(target);
         // only treat as a date-removal if the target is PURELY a date expression
         // (no extra words before the date keyword). "amanhã" → delete. "lixo amanhã" → fall through to AI.
-        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
+        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
         if(isPureDate){
           const matched = tasks.filter(t=>t.date===dateTarget);
           console.debug('delete-intercept: date removal for', dateTarget, 'matched=', matched.length);
@@ -1695,7 +1720,28 @@ async function sendMsg(){
       }catch(e){ console.warn('date-removal error', e); }
       // try match by exact or partial name using normalized comparison (ignore accents/punctuation/case)
       const norm = normalizeName(target);
-      const candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+      let candidates = [];
+      if (isTirar) {
+        const dateInTarget = parsePortugueseDate(target);
+        if (dateInTarget) {
+          const tasksOnDay = tasks.map((t,i)=>({t,i})).filter(x => x.t.date === dateInTarget);
+          const nameKeyword = target
+            .replace(/\b(dia\s+\d{1,2}|\d{1,2}\/\d{1,2}|hoje|amanhã|amanha|segunda|terça|quarta|quinta|sexta|sábado|domingo)(\s+-feira)?\b/gi, '')
+            .replace(/\b(do|da|de|no|na)\b/gi, '')
+            .trim();
+          if (nameKeyword) {
+            const normKey = normalizeName(nameKeyword);
+            candidates = tasksOnDay.filter(x => normalizeName(x.t.name||'').includes(normKey));
+            if (!candidates.length) candidates = tasksOnDay;
+          } else {
+            candidates = tasksOnDay;
+          }
+        } else {
+          candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+        }
+      } else {
+        candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+      }
       if(candidates.length===0){
           // No matching task found — fall through to AI so natural phrases like
           // "tirar o lixo amanhã" are treated as task additions, not failed deletions.
@@ -1716,7 +1762,25 @@ async function sendMsg(){
           if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
           return;
         }
-        // multiple candidates -> ask for clarification
+        // multiple candidates — if all share the same name (or came from isTirar date filter), remove all at once
+        const uniqueNames = [...new Set(candidates.map(c=>c.t.name||''))];
+        if(isTirar || uniqueNames.length === 1){
+          const indicesToRemove = new Set(candidates.map(c=>c.i));
+          const removed = candidates.map(c=>c.t);
+          console.debug('delete-intercept: removing', removed.length, 'candidates with same name', uniqueNames[0]);
+          removeUserMessage(text);
+          removed.forEach(r => deleteTaskAttachment(r));
+          tasks = tasks.filter((_,i) => !indicesToRemove.has(i));
+          saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+          const removedNames = [...new Set(removed.map(r=>r.name||'—'))];
+          addMsg('ai', `Removidas ${removed.length} tarefa${removed.length>1?'s':''}: ${removedNames.join(', ')}`);
+          try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
+          inpElem.value=''; inpElem.style.height='42px';
+          const sb3 = document.getElementById('send-btn'); const sbb3 = document.getElementById('send-btn-bottom');
+          if(sb3) sb3.disabled = false; if(sbb3) sbb3.disabled = false;
+          return;
+        }
+        // multiple candidates with different names -> ask for clarification
         console.debug('delete-intercept: multiple candidates for', target, candidates.map(c=>c.t.name));
         removeUserMessage(text);
         const list = candidates.map(c=>`- ${c.t.name} (${c.t.date}${c.t.time? ' '+c.t.time:''})`).join('\n');
@@ -1870,7 +1934,7 @@ Contexto histórico (opcional):\n${aggSummary}
 Regras importantes de comportamento:
 - Nunca interprete uma mensagem que contenha apenas um ou poucos dígitos (por exemplo: "1", "2") como uma seleção de menu automática. Se o usuário enviar apenas um número, trate isso como texto ambíguo e peça um pequeno esclarecimento antes de executar qualquer ação.
 - Não solicite que o usuário responda escolhendo números. Prefira instruções em texto ou passos em linhas separadas.
-- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Se o usuário pedir para remover/excluir/apagar uma tarefa, responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
+- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Essa instrução se aplica SOMENTE quando o usuário usar explicitamente as palavras "remover", "excluir", "apagar" ou "deletar". A palavra "tirar" NUNCA é um pedido de remoção — pode significar "fazer uma prova", "tirar foto", "tirar uma dúvida", etc. Quando for um pedido claro de remoção (usando remover/excluir/apagar/deletar), responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação."
 
 Seu trabalho:
 1. Entender o que precisa ser feito
@@ -1912,8 +1976,17 @@ ${tasksSummary}`;
     if(data.error){ throw new Error(data.error.message); }
 
     const full   = data.choices[0].message.content;
-    const parts  = full.split('---JSON---');
+    const normalized = full
+      .replace(/---\s*JSON\s*---/gi, '---JSON---')
+      .replace(/```json[\s\S]*?```/g, (match) => '---JSON---' + match.replace(/```json\s*/, '').replace(/\s*```$/, ''));
+    const parts  = normalized.split('---JSON---');
     const reply  = parts[0].trim();
+    const cleanReply = reply
+      .replace(/\[\s*\]/g, '')
+      .replace(/^\s*-{3,}\s*$/gm, '')
+      .replace(/\bJSON\b/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
     let newTasks = [];
 
     if(parts[1]){
@@ -1925,9 +1998,9 @@ ${tasksSummary}`;
 
     thinking.remove();
     history.push({role:'assistant', content: full});
-    addMsg('ai', reply);
+    addMsg('ai', cleanReply);
     // save assistant reply
-    saveMessageToFirebase('assistant', reply);
+    saveMessageToFirebase('assistant', cleanReply);
     saveLearningRecord('message', { role:'assistant', text: reply });
 
     if(newTasks.length){
