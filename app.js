@@ -327,8 +327,45 @@ async function saveAttachmentRecord(name, url, size, mime, ocr){
     if(!window.db) return;
     const col = getUserCollection('attachments');
     if (!col) return;
+    // avoid duplicates
+    const snap = await getDocs(col);
+    const exists = snap.docs.find(d => d.data().url === url);
+    if(exists) return;
     await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveAttachmentRecord', e); }
+}
+
+async function loadAttachmentsForUser(){
+  try{
+    if(!window.db || !window.auth || !window.auth.currentUser) return;
+    const col = getUserCollection('attachments');
+    if(!col) return;
+    const snap = await getDocs(col);
+    const removed = new Set(loadRemovedAttachmentUrls());
+    const cur = loadLocalAttachments();
+    let changed = false;
+    snap.docs.forEach(d => {
+      const a = d.data();
+      if(!a.url || removed.has(a.url)) return;
+      if(!cur.find(x => x.url === a.url)){
+        cur.push({ id: d.id, name: a.name||'anexo', url: a.url, size: Number(a.size||0), mime: a.mime||null, ts: a.ts||new Date().toISOString() });
+        changed = true;
+      }
+    });
+    if(changed){ saveLocalAttachments(cur); }
+    renderAttachmentsPanel();
+  }catch(e){ console.warn('loadAttachmentsForUser', e); }
+}
+
+async function deleteAttachmentFromFirestore(url){
+  try{
+    if(!window.db || !window.auth || !window.auth.currentUser) return;
+    const col = getUserCollection('attachments');
+    if(!col) return;
+    const snap = await getDocs(col);
+    const toDelete = snap.docs.filter(d => d.data().url === url);
+    for(const d of toDelete){ await deleteDoc(doc(window.db, col.path, d.id)); }
+  }catch(e){ console.warn('deleteAttachmentFromFirestore', e); }
 }
 
 // local attachments storage (persist metadata in localStorage for quick access) - USER SCOPED
@@ -342,6 +379,24 @@ function loadLocalAttachments(){
 function saveLocalAttachments(list){
   try{ localStorage.setItem(getAttachmentsStorageKey(), JSON.stringify(list||[])); }catch(e){ console.warn('saveLocalAttachments', e); }
 }
+function getRemovedAttachmentsKey(){ return (window.auth&&window.auth.currentUser ? window.auth.currentUser.uid+'_' : '')+'agenda_attachments_removed'; }
+function loadRemovedAttachmentUrls(){
+  try{
+    // merge both generic and uid-scoped blacklists so nothing slips through
+    const generic = JSON.parse(localStorage.getItem('agenda_attachments_removed')||'[]');
+    const scoped = window.auth&&window.auth.currentUser ? JSON.parse(localStorage.getItem(window.auth.currentUser.uid+'_agenda_attachments_removed')||'[]') : [];
+    return [...new Set([...generic, ...scoped])];
+  }catch(e){ return []; }
+}
+function markAttachmentRemoved(url){
+  try{
+    // write to both keys so it persists regardless of auth state
+    ['agenda_attachments_removed', (window.auth&&window.auth.currentUser ? window.auth.currentUser.uid+'_agenda_attachments_removed' : 'agenda_attachments_removed')].forEach(key=>{
+      const s = new Set(JSON.parse(localStorage.getItem(key)||'[]')); s.add(url); localStorage.setItem(key, JSON.stringify([...s]));
+    });
+  }catch(e){}
+}
+function clearRemovedAttachments(){ try{ localStorage.removeItem(getRemovedAttachmentsKey()); }catch(e){} }
 
 function registerAttachmentLocalRecord(name, url, size, mime, ocr){
   try{
@@ -356,7 +411,16 @@ function registerAttachmentLocalRecord(name, url, size, mime, ocr){
 }
 
 function removeLocalAttachment(id){
-  try{ const list = loadLocalAttachments().filter(a=>a.id!==id); saveLocalAttachments(list); renderAttachmentsPanel(); }catch(e){ console.warn('removeLocalAttachment', e); }
+  try{
+    const list = loadLocalAttachments();
+    const item = list.find(a=>a.id===id);
+    if(item && item.url){
+      markAttachmentRemoved(item.url);
+      deleteAttachmentFromFirestore(item.url).catch(e=>console.warn('deleteAttachmentFromFirestore', e));
+    }
+    saveLocalAttachments(list.filter(a=>a.id!==id));
+    renderAttachmentsPanel();
+  }catch(e){ console.warn('removeLocalAttachment', e); }
 }
 
 function createTaskFromAttachment(id){
@@ -375,7 +439,13 @@ function createTaskFromAttachment(id){
 function renderAttachmentsPanel(){
   try{
     const container = document.getElementById('attachments-list'); if(!container) return;
-    const list = loadLocalAttachments();
+    const allAttachments = loadLocalAttachments();
+    // only show attachments not linked to any active task
+    const taskAttachmentUrls = new Set(tasks.filter(t=>t&&t.attachment).map(t=>t.attachment));
+    const list = allAttachments.filter(a => !taskAttachmentUrls.has(a.url));
+    // show/hide entire section
+    const section = document.getElementById('anexos-section');
+    if(section) section.style.display = list.length ? '' : 'none';
     if(!list.length){ container.innerHTML = '<div class="no-tasks">Nenhum anexo ainda</div>'; return; }
     container.innerHTML = '';
     list.forEach(a=>{
@@ -421,6 +491,8 @@ try{
   window.registerAttachmentLocalRecord = registerAttachmentLocalRecord;
   window.loadLocalAttachments = loadLocalAttachments;
   window.saveLocalAttachments = saveLocalAttachments;
+  window.markAttachmentRemoved = markAttachmentRemoved;
+  window.loadRemovedAttachmentUrls = loadRemovedAttachmentUrls;
 }catch(e){ console.warn('expose debug helpers failed', e); }
 
 // Reconciler: periodically scan attachment previews and persist any completed uploads
@@ -429,6 +501,7 @@ function reconcileAttachmentPreviews(){
     const previews = Array.from(document.querySelectorAll('.attachment-preview'));
     if(!previews.length) return;
     const cur = loadLocalAttachments();
+    const removed = new Set(loadRemovedAttachmentUrls());
     let changed = false;
     for(const p of previews){
       try{
@@ -438,6 +511,7 @@ function reconcileAttachmentPreviews(){
         const titleEl = p.querySelector('.attachment-title');
         if(statusA && statusA.href){
           const href = statusA.href;
+          if(removed.has(href)) continue; // user explicitly removed — don't re-add
           const title = titleEl ? titleEl.textContent : (href.split('/').pop() || 'anexo');
           const exists = cur.find(x=> x.url === href);
           if(!exists){
@@ -637,11 +711,13 @@ window.handleAuthStateChange = async function(user){
       await loadTasksForUser(user.uid);
       try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
       await loadRecipesForUser(user.uid);
+      // Load attachments from Firestore and render panel
+      try{ await loadAttachmentsForUser(); }catch(e){ console.warn('loadAttachmentsForUser', e); }
       try{
         const userMessages = await loadMessagesFromFirebase();
         if(userMessages && userMessages.length > 0){
           for(const msg of userMessages){
-            addMsg(msg.role || 'ai', msg.text || '');
+            addMsg(msg.role || 'ai', msg.text || '', true);
           }
         }
       }catch(e){ console.warn('load messages failed', e); }
@@ -991,8 +1067,9 @@ function deleteTaskAttachment(task){
   const urls = [];
   if(task.attachment) urls.push(task.attachment);
   if(Array.isArray(task.attachments)) task.attachments.forEach(u=>{ if(u && !urls.includes(u)) urls.push(u); });
-  // remove from local attachments panel by URL match
+  // remove from local attachments panel by URL match and blacklist so reconciler won't re-add
   try{
+    urls.forEach(u => markAttachmentRemoved(u));
     const cur = loadLocalAttachments();
     const filtered = cur.filter(a => !urls.includes(a.url));
     if(filtered.length !== cur.length){ saveLocalAttachments(filtered); renderAttachmentsPanel(); }
@@ -1374,7 +1451,7 @@ function renderTasks(){
   }
 
 // ── chat helpers ─────────────────────────────────────────────────
-function addMsg(role, text){
+function addMsg(role, text, fromHistory){
   const msgs = document.getElementById('msgs');
   if(!msgs){
     console.warn('addMsg: msgs element not found');
@@ -1382,6 +1459,7 @@ function addMsg(role, text){
   }
   const wrap = document.createElement('div');
   wrap.className = 'msg '+role;
+  if(fromHistory) wrap.dataset.fromHistory = '1';
   const t = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   const safeText = (text === null || text === undefined) ? '' : String(text);
   wrap.innerHTML = `<div class="bubble">${safeText.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;

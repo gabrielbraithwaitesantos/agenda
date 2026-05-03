@@ -502,7 +502,7 @@
       </div>
     </div>
 
-    <div style="margin-top:12px">
+    <div style="margin-top:12px" id="anexos-section">
       <div class="section-title">anexos</div>
       <div id="attachments-panel" style="display:flex;flex-direction:column;gap:8px;">
         <div id="attachments-list" style="display:flex;flex-direction:column;gap:6px;">
@@ -510,7 +510,7 @@
         </div>
         <div style="display:flex;gap:8px;margin-top:6px">
           <button id="reconcile-attachments-btn" class="cal-nav small">Salvar anexos</button>
-          <button id="clear-attachments-btn" class="cal-nav small" onclick="if(confirm('Limpar todos os anexos?')){ saveLocalAttachments([]); renderAttachmentsPanel(); }">Limpar todos</button>
+          <button id="clear-attachments-btn" class="cal-nav small" onclick="if(confirm('Limpar todos os anexos?')){ loadLocalAttachments().forEach(a=>{ if(a.url) markAttachmentRemoved(a.url); }); saveLocalAttachments([]); renderAttachmentsPanel(); }">Limpar todos</button>
           <div id="reconcile-status" style="color:var(--muted);font-size:12px;align-self:center"></div>
         </div>
       </div>

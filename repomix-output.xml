@@ -623,6 +623,24 @@ function loadLocalAttachments(){
 function saveLocalAttachments(list){
   try{ localStorage.setItem(getAttachmentsStorageKey(), JSON.stringify(list||[])); }catch(e){ console.warn('saveLocalAttachments', e); }
 }
+function getRemovedAttachmentsKey(){ return (window.auth&&window.auth.currentUser ? window.auth.currentUser.uid+'_' : '')+'agenda_attachments_removed'; }
+function loadRemovedAttachmentUrls(){
+  try{
+    // merge both generic and uid-scoped blacklists so nothing slips through
+    const generic = JSON.parse(localStorage.getItem('agenda_attachments_removed')||'[]');
+    const scoped = window.auth&&window.auth.currentUser ? JSON.parse(localStorage.getItem(window.auth.currentUser.uid+'_agenda_attachments_removed')||'[]') : [];
+    return [...new Set([...generic, ...scoped])];
+  }catch(e){ return []; }
+}
+function markAttachmentRemoved(url){
+  try{
+    // write to both keys so it persists regardless of auth state
+    ['agenda_attachments_removed', (window.auth&&window.auth.currentUser ? window.auth.currentUser.uid+'_agenda_attachments_removed' : 'agenda_attachments_removed')].forEach(key=>{
+      const s = new Set(JSON.parse(localStorage.getItem(key)||'[]')); s.add(url); localStorage.setItem(key, JSON.stringify([...s]));
+    });
+  }catch(e){}
+}
+function clearRemovedAttachments(){ try{ localStorage.removeItem(getRemovedAttachmentsKey()); }catch(e){} }
 
 function registerAttachmentLocalRecord(name, url, size, mime, ocr){
   try{
@@ -637,7 +655,13 @@ function registerAttachmentLocalRecord(name, url, size, mime, ocr){
 }
 
 function removeLocalAttachment(id){
-  try{ const list = loadLocalAttachments().filter(a=>a.id!==id); saveLocalAttachments(list); renderAttachmentsPanel(); }catch(e){ console.warn('removeLocalAttachment', e); }
+  try{
+    const list = loadLocalAttachments();
+    const item = list.find(a=>a.id===id);
+    if(item && item.url) markAttachmentRemoved(item.url);
+    saveLocalAttachments(list.filter(a=>a.id!==id));
+    renderAttachmentsPanel();
+  }catch(e){ console.warn('removeLocalAttachment', e); }
 }
 
 function createTaskFromAttachment(id){
@@ -656,7 +680,13 @@ function createTaskFromAttachment(id){
 function renderAttachmentsPanel(){
   try{
     const container = document.getElementById('attachments-list'); if(!container) return;
-    const list = loadLocalAttachments();
+    const allAttachments = loadLocalAttachments();
+    // only show attachments not linked to any active task
+    const taskAttachmentUrls = new Set(tasks.filter(t=>t&&t.attachment).map(t=>t.attachment));
+    const list = allAttachments.filter(a => !taskAttachmentUrls.has(a.url));
+    // show/hide entire section
+    const section = document.getElementById('anexos-section');
+    if(section) section.style.display = list.length ? '' : 'none';
     if(!list.length){ container.innerHTML = '<div class="no-tasks">Nenhum anexo ainda</div>'; return; }
     container.innerHTML = '';
     list.forEach(a=>{
@@ -702,6 +732,8 @@ try{
   window.registerAttachmentLocalRecord = registerAttachmentLocalRecord;
   window.loadLocalAttachments = loadLocalAttachments;
   window.saveLocalAttachments = saveLocalAttachments;
+  window.markAttachmentRemoved = markAttachmentRemoved;
+  window.loadRemovedAttachmentUrls = loadRemovedAttachmentUrls;
 }catch(e){ console.warn('expose debug helpers failed', e); }
 
 // Reconciler: periodically scan attachment previews and persist any completed uploads
@@ -710,6 +742,7 @@ function reconcileAttachmentPreviews(){
     const previews = Array.from(document.querySelectorAll('.attachment-preview'));
     if(!previews.length) return;
     const cur = loadLocalAttachments();
+    const removed = new Set(loadRemovedAttachmentUrls());
     let changed = false;
     for(const p of previews){
       try{
@@ -719,6 +752,7 @@ function reconcileAttachmentPreviews(){
         const titleEl = p.querySelector('.attachment-title');
         if(statusA && statusA.href){
           const href = statusA.href;
+          if(removed.has(href)) continue; // user explicitly removed — don't re-add
           const title = titleEl ? titleEl.textContent : (href.split('/').pop() || 'anexo');
           const exists = cur.find(x=> x.url === href);
           if(!exists){
@@ -1272,6 +1306,13 @@ function deleteTaskAttachment(task){
   const urls = [];
   if(task.attachment) urls.push(task.attachment);
   if(Array.isArray(task.attachments)) task.attachments.forEach(u=>{ if(u && !urls.includes(u)) urls.push(u); });
+  // remove from local attachments panel by URL match and blacklist so reconciler won't re-add
+  try{
+    urls.forEach(u => markAttachmentRemoved(u));
+    const cur = loadLocalAttachments();
+    const filtered = cur.filter(a => !urls.includes(a.url));
+    if(filtered.length !== cur.length){ saveLocalAttachments(filtered); renderAttachmentsPanel(); }
+  }catch(e){}
   if(!urls.length) return;
   try{
     const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
@@ -1408,9 +1449,10 @@ function renderTasks(){
   // upcoming: future or today tasks that are not completed
   const upcoming = visible.filter(t=>!t.completedAt && t.date>=td).sort((a,b)=>a.date>b.date?1:-1).slice(0,6);
 
+  const pending = visible.filter(t => !t.completedAt && t.date >= td);
   const statTotal = document.getElementById('stat-total');
-  if(statTotal) statTotal.textContent = visible.length;
-  const totalMin = visible.reduce((s,t)=>s+(t.est||0),0);
+  if(statTotal) statTotal.textContent = pending.length;
+  const totalMin = pending.reduce((s,t)=>s+(t.est||0),0);
   const statTime = document.getElementById('stat-time');
   if(statTime) statTime.textContent = totalMin
     ? (totalMin>=60 ? (Math.round(totalMin/6)/10)+'h' : totalMin+'min')
@@ -1473,7 +1515,7 @@ function renderTasks(){
     if(examList){
       const seen = new Set();
       const exams = tasks
-        .filter(t => t && !t.completedAt && t.onlyExamDay)
+        .filter(t => t && !t.completedAt && t.onlyExamDay && t.date >= td)
         .sort((a, b) => a.date > b.date ? 1 : -1)
         .filter(t => {
           const key = (t.name || '') + '_' + (t.date || '');
@@ -1936,7 +1978,7 @@ async function sendMsg(){
         const dateTarget = parsePortugueseDate(target);
         // only treat as a date-removal if the target is PURELY a date expression
         // (no extra words before the date keyword). "amanhã" → delete. "lixo amanhã" → fall through to AI.
-        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
+        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|\d{1,2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
         if(isPureDate){
           const matched = tasks.filter(t=>t.date===dateTarget);
           console.debug('delete-intercept: date removal for', dateTarget, 'matched=', matched.length);
@@ -1994,8 +2036,28 @@ async function sendMsg(){
       }catch(e){ console.warn('date-removal error', e); }
       // try match by exact or partial name using normalized comparison (ignore accents/punctuation/case)
       const norm = normalizeName(target);
-      // "tirar" é ambíguo — só remove por data pura, nunca por correspondência de nome
-      const candidates = isTirar ? [] : tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+      let candidates = [];
+      if (isTirar) {
+        const dateInTarget = parsePortugueseDate(target);
+        if (dateInTarget) {
+          const tasksOnDay = tasks.map((t,i)=>({t,i})).filter(x => x.t.date === dateInTarget);
+          const nameKeyword = target
+            .replace(/\b(dia\s+\d{1,2}|\d{1,2}\/\d{1,2}|hoje|amanhã|amanha|segunda|terça|quarta|quinta|sexta|sábado|domingo)(\s+-feira)?\b/gi, '')
+            .replace(/\b(do|da|de|no|na)\b/gi, '')
+            .trim();
+          if (nameKeyword) {
+            const normKey = normalizeName(nameKeyword);
+            candidates = tasksOnDay.filter(x => normalizeName(x.t.name||'').includes(normKey));
+            if (!candidates.length) candidates = tasksOnDay;
+          } else {
+            candidates = tasksOnDay;
+          }
+        } else {
+          candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+        }
+      } else {
+        candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
+      }
       if(candidates.length===0){
           // No matching task found — fall through to AI so natural phrases like
           // "tirar o lixo amanhã" are treated as task additions, not failed deletions.
@@ -2016,7 +2078,25 @@ async function sendMsg(){
           if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
           return;
         }
-        // multiple candidates -> ask for clarification
+        // multiple candidates — if all share the same name (or came from isTirar date filter), remove all at once
+        const uniqueNames = [...new Set(candidates.map(c=>c.t.name||''))];
+        if(isTirar || uniqueNames.length === 1){
+          const indicesToRemove = new Set(candidates.map(c=>c.i));
+          const removed = candidates.map(c=>c.t);
+          console.debug('delete-intercept: removing', removed.length, 'candidates with same name', uniqueNames[0]);
+          removeUserMessage(text);
+          removed.forEach(r => deleteTaskAttachment(r));
+          tasks = tasks.filter((_,i) => !indicesToRemove.has(i));
+          saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+          const removedNames = [...new Set(removed.map(r=>r.name||'—'))];
+          addMsg('ai', `Removidas ${removed.length} tarefa${removed.length>1?'s':''}: ${removedNames.join(', ')}`);
+          try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
+          inpElem.value=''; inpElem.style.height='42px';
+          const sb3 = document.getElementById('send-btn'); const sbb3 = document.getElementById('send-btn-bottom');
+          if(sb3) sb3.disabled = false; if(sbb3) sbb3.disabled = false;
+          return;
+        }
+        // multiple candidates with different names -> ask for clarification
         console.debug('delete-intercept: multiple candidates for', target, candidates.map(c=>c.t.name));
         removeUserMessage(text);
         const list = candidates.map(c=>`- ${c.t.name} (${c.t.date}${c.t.time? ' '+c.t.time:''})`).join('\n');
@@ -2170,7 +2250,7 @@ Contexto histórico (opcional):\n${aggSummary}
 Regras importantes de comportamento:
 - Nunca interprete uma mensagem que contenha apenas um ou poucos dígitos (por exemplo: "1", "2") como uma seleção de menu automática. Se o usuário enviar apenas um número, trate isso como texto ambíguo e peça um pequeno esclarecimento antes de executar qualquer ação.
 - Não solicite que o usuário responda escolhendo números. Prefira instruções em texto ou passos em linhas separadas.
-- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Essa instrução se aplica SOMENTE quando o usuário usar explicitamente as palavras "remover", "excluir", "apagar" ou "deletar". A palavra "tirar" NUNCA é um pedido de remoção — pode significar "fazer uma prova", "tirar foto", "tirar uma dúvida", etc. Quando for um pedido claro de remoção (usando remover/excluir/apagar/deletar), responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
+- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Essa instrução se aplica SOMENTE quando o usuário usar explicitamente as palavras "remover", "excluir", "apagar" ou "deletar". A palavra "tirar" NUNCA é um pedido de remoção — pode significar "fazer uma prova", "tirar foto", "tirar uma dúvida", etc. Quando for um pedido claro de remoção (usando remover/excluir/apagar/deletar), responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação."
 
 Seu trabalho:
 1. Entender o que precisa ser feito
@@ -2220,6 +2300,7 @@ ${tasksSummary}`;
     const cleanReply = reply
       .replace(/\[\s*\]/g, '')
       .replace(/^\s*-{3,}\s*$/gm, '')
+      .replace(/\bJSON\b/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
     let newTasks = [];
@@ -3694,7 +3775,7 @@ service cloud.firestore {
       </div>
     </div>
 
-    <div style="margin-top:12px">
+    <div style="margin-top:12px" id="anexos-section">
       <div class="section-title">anexos</div>
       <div id="attachments-panel" style="display:flex;flex-direction:column;gap:8px;">
         <div id="attachments-list" style="display:flex;flex-direction:column;gap:6px;">
@@ -3702,6 +3783,7 @@ service cloud.firestore {
         </div>
         <div style="display:flex;gap:8px;margin-top:6px">
           <button id="reconcile-attachments-btn" class="cal-nav small">Salvar anexos</button>
+          <button id="clear-attachments-btn" class="cal-nav small" onclick="if(confirm('Limpar todos os anexos?')){ loadLocalAttachments().forEach(a=>{ if(a.url) markAttachmentRemoved(a.url); }); saveLocalAttachments([]); renderAttachmentsPanel(); }">Limpar todos</button>
           <div id="reconcile-status" style="color:var(--muted);font-size:12px;align-self:center"></div>
         </div>
       </div>
