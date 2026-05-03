@@ -1628,13 +1628,16 @@ async function sendMsg(){
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
     // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
-    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:d[ao]\s+)?(.+)$/i);
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
     if(delMatch){
       const target = delMatch[1].trim();
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
       try{
         const dateTarget = parsePortugueseDate(target);
-        if(dateTarget){
+        // only treat as a date-removal if the target is PURELY a date expression
+        // (no extra words before the date keyword). "amanhã" → delete. "lixo amanhã" → fall through to AI.
+        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
+        if(isPureDate){
           const matched = tasks.filter(t=>t.date===dateTarget);
           console.debug('delete-intercept: date removal for', dateTarget, 'matched=', matched.length);
           if(!matched.length){
