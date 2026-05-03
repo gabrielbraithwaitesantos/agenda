@@ -1607,8 +1607,8 @@ async function sendMsg(){
   }catch(e){ console.warn('clear inputs after send', e); }
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
-    // accept more verbs (e.g. "tirar", "retirar") and optional articles/plural before the target
-    const delMatch = text.match(/^\s*(remover|remova|excluir|exclua|apagar|deletar|tirar|retirar)\s+(?:as?\s+)?(?:tarefas?\s+)?(.+)$/i);
+    // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|me\s+ajuda\s+a|por\s+favor)\s+)?(remover|remova|excluir|exclua|apagar|deletar|tirar|retirar)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:d[ao]\s+)?(.+)$/i);
     if(delMatch){
       const target = delMatch[2].trim();
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
@@ -1676,8 +1676,8 @@ async function sendMsg(){
           // debug
           console.debug('delete-intercept: no candidates for', target, 'tasksLoaded=', tasks.length);
           // if nothing matched, offer available task names to help the user
-          const available = tasks.map(t=>t.name || '—').slice(0,8).join('\n');
-          addMsg('ai', `Não encontrei nenhuma tarefa com "${target}". Tarefas disponíveis:\n${available}\n\nTente usar o nome completo ou diga: "remover tarefa NOME_DA_TAREFA".`);
+          const available = tasks.filter(t=>t&&t.name).slice(0,8).map(t=>`• ${t.name} (${t.date.split('-').reverse().slice(0,2).join('/')})`).join('\n');
+          addMsg('ai', `Não encontrei tarefa com "${target}".\n\nSuas tarefas:\n${available||'(nenhuma)'}\n\nEscreva: remover [nome] ou remover [dd/mm]`);
         // clear input and re-enable buttons
         inpElem.value=''; inpElem.style.height='42px';
         const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
@@ -1845,6 +1845,7 @@ Contexto histórico (opcional):\n${aggSummary}
 Regras importantes de comportamento:
 - Nunca interprete uma mensagem que contenha apenas um ou poucos dígitos (por exemplo: "1", "2") como uma seleção de menu automática. Se o usuário enviar apenas um número, trate isso como texto ambíguo e peça um pequeno esclarecimento antes de executar qualquer ação.
 - Não solicite que o usuário responda escolhendo números. Prefira instruções em texto ou passos em linhas separadas.
+- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Se o usuário pedir para remover/excluir/apagar uma tarefa, responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
 
 Seu trabalho:
 1. Entender o que precisa ser feito
