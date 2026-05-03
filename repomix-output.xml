@@ -51,10 +51,13 @@ The content is organized as follows:
 app.js
 cors.json
 firebase.json
+firestore.rules
 index.html
 package.json
 README.md
+storage.rules
 styles.css
+test-upload.png
 </directory_structure>
 
 <files>
@@ -75,24 +78,14 @@ This section contains the contents of the repository's files.
 </file>
 
 <file path=".firebase/hosting..cache">
-styles.css,1777727765211,afcfcd997b0f78b56c41d0d6ae9f9b2605cb1dc18de65e48476fec0da168b356
-repomix-output.xml,1777685161024,fea4fc0e51159d93c2e724b2d2c86ffef222513f30b289393c593bcda79effac
 package.json,1777257474591,ccc4a3a98737baecc2d11b5611b7cc1326e29e0473eda6f2b5538cd78920cfb9
 package-lock.json,1777257475328,79b9c52c03cc54079d69c2c22f34d371208c7b764b1f485a2e61f98d13c3da5a
-index.html,1777753144782,ea9dcea395606ab2ccd678f1848b5454a39b3182954160e28faeac9c85656195
 cors.json,1776898766411,bc029c7e2fffc4ffd117aad327e5649e44b092142abf0bbb944268adc7475e63
 README.md,1777259737383,049ce304ac25603427e3e50b60706d6257ee11417d4702f1b6194acf0b1791ec
 .github/workflows/deploy-hosting.yml,1777259737590,896e133f26518bf94c30f6f5bbfe47e04245c0dc1deb221047be86dcb77c585e
 .git/packed-refs,1777260445275,82f77e1376ab2876021a7edbe455bb5e634adacdc6490cdce1204d286b71173c
-.git/index,1777734272593,6056e4b939752a3e4979b606fb570b937994f6ae1bcc3c8babb4fec526cde4b0
 .git/description,1776959814941,ebf7809b165f33d0c5879fe7647d39608e0b21e1e5ed37fd2252c7fdf5d2afdb
-.git/config,1776960287864,0357a8e1ff8f24ddcdf50e57043d5f2905052218a7c856874f2e87e2f47ea0a0
-.git/ORIG_HEAD,1777729223720,2de79d34accc616b14fd775758c4d2daa06f4abe1e927fa8a3ca7f5d4cb25598
-.git/HEAD,1777296526201,387c893afbe6422414372ab964a5e859caa99e878a322b9b1870cb2b6d2d2d8e
 .git/FETCH_HEAD,1776960258502,a0e7fad0afcfade2241d5cedf681187542addbf22ee91e40039922427e1b609f
-.git/COMMIT_EDITMSG,1777734272603,030f6143871bcf2fc4c764bbbd4eacfb32e8b8c47f0147a8014bc6ae929c495b
-.git/refs/remotes/origin/main,1777734277432,7f315a86078a427c7b881a07f066005837a6f716b906cfe7eef3f7c0f9a0f4a8
-.git/refs/heads/fix-push,1777734272606,7f315a86078a427c7b881a07f066005837a6f716b906cfe7eef3f7c0f9a0f4a8
 .git/objects/pack/pack-61068c88355e998c9d108cc98e6e7449b16257d1.rev,1777260463979,abd638f7a5f48ab4c4e19f8d69d74695d897d33a1b1c9cfe4a4f1f419cfe6e20
 .git/objects/pack/pack-61068c88355e998c9d108cc98e6e7449b16257d1.pack,1777290795881,695ec3da641a12ccd33364f094567754bdf8cd3a7b8553a64e75e12b81ed8098
 .git/objects/pack/pack-61068c88355e998c9d108cc98e6e7449b16257d1.idx,1777260463962,26dc73d44683c8eba18afe31b01e13d67810e2139cb5866ecb532ee636382cf9
@@ -118,7 +111,6 @@ README.md,1777259737383,049ce304ac25603427e3e50b60706d6257ee11417d4702f1b6194acf
 .git/objects/a3/f49441ff2e2d020a3b065d0e6a0d25a8d94192,1777729245702,05caab082faae7cb6cb606f47068b07453215802d75c30a8e8587c3e313194a4
 .git/objects/a3/f15139a36e826333e48fc785390f48ab45b2a2,1777316060468,d1c59e7ca02a085da3ebe0f30b982a6d8dc09a13726caba001ddcbbc4ad7a43c
 .git/objects/9c/6507bc5a6c56448f6d73bfc9b3b043088683da,1777298814478,eeb6182074302d40ae44d53087ce3881c4b5e09ea753371bbb2fa6413337b79b
-.git/objects/97/2c213cc4b4ba88723bbdb4077fe9a833b1e864,1777729079784,ec0f4665bd2b6bd8cd265f05f2ba1b5d65d0f55c278af571e43405914dd18606
 .git/objects/96/58528dbb3683d28e7246a8db3e1fbc533c40f4,1777731757841,5cceabcfcec1c8a5abaebd0668bec7cff433152f51dc4766d28995f8b28baa62
 .git/objects/95/7728ddd61529723a4ab33c4c0d920bc0cca9a7,1777296457305,71e60d115fca05ba71732e788593391b4fa36054c6b6139e9acc8e7a134a039f
 .git/objects/91/35338a072d73075a47dfa7c21612ae723900d0,1777296509844,053c2a01c5eee8e7a6cc7785a46bd1842d77e0fca9ef5715584736263d67c1bb
@@ -131,36 +123,54 @@ README.md,1777259737383,049ce304ac25603427e3e50b60706d6257ee11417d4702f1b6194acf
 .git/objects/68/bc1c3c10fd887717fd1194bc04157747b18a52,1777290803438,3d622d0ced56c7fa888f345b01c8f2b74bd82947c7b4f612dfc1df1758954ab1
 .git/objects/68/3e2c884841b8014758cea86b9869bc55200aff,1777316100291,582c1a75684cbc3e35794448568b77250b7871b63cbaa0ea1a7c41345b1639a3
 .git/objects/68/2931b770cec487c1611157063bdfa23c00d8ca,1777290999205,d524c55c31f9a55c20a8591e340fa0926b1e73ee4955d1b89f5732534778bcb6
+test-upload.png,1777767945334,bfd8917906b21a132a3c5eb28362cf48934ad4c0c7611650e5173b322393ba6f
+styles.css,1777780202775,afcfcd997b0f78b56c41d0d6ae9f9b2605cb1dc18de65e48476fec0da168b356
 .git/objects/56/f9a62f12bcf5fcb6d443566d9e00b992031bad,1776960258539,fecdcd7c5f505b24f4eff2022d30700ab18613740e425fbf986863640284c5e8
+storage.rules,1777780521333,ad38559f155070d7626abff14b9b0bee7c1cb75da24490d547d8bf099bd6119a
 .git/objects/53/fb790feb1a05ad1e070be7867f495f53c7147e,1777734263714,a02656efc3c59e8127e5f7c3b3cafc4f307f481649d0d705815486071e8b9370
 .git/objects/50/7777f02839f3000e526f33d7ea6bd35a2cbf83,1777729478813,b66b187e8e63a94a5e3e15e5b04840b0390fb049d9de991b6ed8ae1f0c4e7647
+firestore.rules,1777780520274,ac22653b06d15cee40ea0872bddaab0b835c6f74eb798be7b318d3e1cfa95cea
+index.html,1777780514827,e700340282cd0c416d9fcddd3fdecda4d92332ba2106913297edd4a1d15af2aa
 .git/objects/4b/37e5cb2deaaa9c885fe64576522863a7ffdd80,1777729204078,8a24c6c0a06df75dcf5c9a706ddb8978771919410f14152b843e71c70cdf9498
 .git/objects/4a/58da574212559a8a85117211e23fb595511a61,1777290998834,ed10c72dfca9a9de3c1b09c689655d43d2f347637dc0f651cbbc72e0860a6877
+.git/config,1777763757159,f751fb840ccfb27f9b1141a5d14c330a8b325b91f00da887d9829b68da8f3093
 .git/objects/48/21dcd11db9fffc8f3603943f3b11613d1664c9,1777290115489,00fa851802304ee357a7b3c730fb6820ee4c48fea4b0d8a66344f1ac0cf50d18
+.git/HEAD,1777763755031,58766951e606b2022f59cd9f29b2917abd798a925686f219a831c72d3b896199
 .git/objects/3d/01ab1a87b7c6b88f2ebcf900791a7b19ea09c6,1777729204296,370eb45be37f084a80d95939d5a4d4d1f429e605e3b18e4750dac9a15b6c5f58
 .git/objects/39/68e1914d8ae6e48c492a6e211cc9740b4d2f6d,1777296425455,f0a0c9127243deef7f5fb0bbb0d16880cfd8f163382e905e1ef957d79b38166b
+.git/COMMIT_EDITMSG,1777780562223,8dd3c428a9c6ec9be07a387e7ebf9f542efb032bbd806aa2f312c62ae153ef52
+.git/refs/remotes/origin/main,1777780602151,0162ac20e317301b8eb11e8708a42b1c4ee30f0d48eb30df64aad5e596376b78
 .git/objects/31/2504bba3979b910c9d75327327ce4320db9a20,1777732289067,f4cda526a172c31383f97364f29c4ed36ebf1cee6dcba7ffc9cf42ad12dd4003
 .git/objects/30/e2b655c98459de6f78f771990d7066d25091f0,1777295194538,41f48c3411aec9e915f07622f9c81cc24a4135b4eb4ef17bd6c730202bb9346c
 .git/objects/2a/15252860150dd8f1b7415a4b3f505ddcb17d13,1777290105406,fe8204e49b70c2fa891cfce9f37a562fd93587cc8439016143d0044e1088ccd4
+.git/ORIG_HEAD,1777763755045,7f315a86078a427c7b881a07f066005837a6f716b906cfe7eef3f7c0f9a0f4a8
 .git/objects/1b/f867e3bb6579c6b0c5426c74f23d35f70921f2,1776960258538,79bb5bde5d01c28fcfd99379cbd08ea62085a949717ad0d9deb7d02767b1c8fb
 .git/objects/1a/e9e7bbb7570bac93455b51852d82dd0ee0c178,1777298814477,cdec85504dd9c2708bf17f3cbb268842b6bb1d8ecb28c20d003401d9af2ca6f8
 .git/objects/19/ce4c86bf15d1e0ddb18b8a40e4725cceb22ded,1776960278695,cf267b55f0c0ed9a751c40598f7650861473cc0eee4ce99c605d0f01bccc1f16
+.git/refs/heads/main,1777780562227,0162ac20e317301b8eb11e8708a42b1c4ee30f0d48eb30df64aad5e596376b78
 .git/objects/18/2b290999a48f78d1e6200bcf2407a77181e81e,1777734272533,8ee493778f927ca6d526807665c5b93c814922f6cc7ea776d6d8d30f5f0c87ce
 .git/objects/15/ead78568c9587a95d257569767e9293e92c544,1777296457236,6bd3fba1f34f0fbfa60472ba323400b84686a27161b0bd8acc100d076ae2dceb
 .git/objects/15/bf8c9e8cc092eed19851292114ddca0a2a79cf,1777290803393,460a0f81d0a8efd992fda86e47f2362b591e3dfdb0bd41d9bbec73f048383492
 .git/objects/15/56c005974eda434065f791b99c604379eda265,1777734263720,1dfbb6f6e8f1d9f7ae2d5ee8a36af50f8cc5669d2ecf883e7da4841807030599
+.git/refs/heads/fix-push,1777763629959,f5c68c7f45baef785df609a14a5f967f06e24999885f55b53963266c6c441a54
 .git/objects/12/5d1ba20ad8bb8631f4962421474f298b551cb6,1777734263722,dfe0c01853cfdac135e01619fb2aa96a67352ccd54c161aba5d16a4616996ec9
 .git/objects/10/09f2cdf1e68660525d70866ad1ada74c4bdada,1777729079797,e347787cc1d7d1a6b5cb5c0368a28d76c7563251bc799aeda6d3e22e9fadee32
+.git/objects/ff/3eeca128666fa5dde14019fab39381e06a5d3b,1777780526359,da4a8977f4b19a5df1bcd8441756c3c674c75c461faa091d8c0c4d7d2bf65ed9
 .git/objects/0c/4ef6d46c3925cda980a60ae581f15d02a6c807,1777734272534,dd81dcee666a5f0d795a08785c5ee9b87d4bc8f901c6b40a97ea1187e1be9b21
+.git/objects/f7/399f9ff7c037d60ed96d384f7fd1c2d784788b,1777780526363,2239c2eb35d84cc1e91817ff3c2b0fef317859ccf43dca5cc7e02287fafeecd2
+.git/objects/f6/dff421a3e15121d460dc42e8e961084c7abfe7,1777764286106,8b0d1bac033f80d79560e0d5d7d50f30fa578ecf7add0dd7f6c05096c6cc293b
 .git/objects/06/20f239f8387a13d11390f8e9618ec6b6dee28f,1777296479819,50012bf68c3efbcf03be48d766bb58723ef97840bc7bd27288dc067962c9986d
 .git/objects/06/1a9934e797fb759b0fb34af1ed3afbca074e53,1777729478921,627242f92744adc059421143b5a5d11293ea907079c71d5026cf32d022f78436
 .git/objects/05/aa6d091e9499565a2e4d555816a38c7d4b1820,1777729079779,5220a49add8b0337ec9b1434a083569e9b19f94094e8bdd347c8bcfb8fee7c76
 .git/objects/05/5b1a18df349d7102b0acec1286bf4efdb08dc1,1777729204200,3e03bcf40c2680d02e2da1854a435275f2abba9c4d5cce197ef62b1762051fb1
 .git/objects/03/70fc34b980c4b5d5e6632e885cfeeede6cca4c,1777731757781,eb6b74314440677b9e898caa132630244864f176a264c81f85c3c14ff94c642b
-.git/logs/HEAD,1777734272606,fa0e14cf9ac3813d03f8f81cd28095d71e376f6943600ad24fd94fcb0f05602a
-.git/logs/refs/remotes/origin/main,1777734277433,32b7d0edf21bf938a16e09bc74e554b7ace0af89996689e8eb1a8a925c024e8f
+.git/objects/f6/7c80cd76af3784ed8f061e6d07c70e30f602cf,1777769715012,f8c8105a96ede226f0438b10b9967205b527c35859dcd927bec02596c9387d87
+.git/objects/f5/29c4cddfbd4a8dd1077438934bfed4f97189b5,1777765781573,88bfadde0bb2e4774d15325555f5baf635a2b3eacc4e368a5f9fb094384ea567
+.git/objects/f2/5a94a19427f677c3ac463c06545133daf04b40,1777766629238,63a4f9ea396ce104fa15c9e68be6421d1e280077a9f098760c957844b76829aa
+.git/objects/ff/4f8e09b1a30d5b5bd7fb5128369e75f9caa4ea,1777763903194,21111b436d42f2867409ce847b71fe7dcce185c143765abe8f96aa9ebd54b4e1
 .git/logs/refs/heads/master,1777260445291,a1b2f72e9107b6f9aa6bd2c1155bca414b356adf632ab97c46b359a6c728f888
-.git/logs/refs/heads/fix-push,1777734272606,cc2bc1c14b2ecadf98f5c1531e0fd19c8591089060a82b35da3a149ff18a31cd
+.git/objects/fb/47f636c2aec481ca85423e51ddaabfca997221,1777766061672,cfade231d55c34a6fde9ce9fad6307ac6e88baf11076e536683753a63bee326d
+.git/objects/db/8a2cd083efb1aaf59253d5666e49221f94ebd3,1777763947398,bcfbbbc72969795d5d4e89b75f8d18542d4b2b2732ed5804f93ec3c2c3567fc1
 .git/info/refs,1777260464957,1c554c8c0936d876c8310c58a5c9414d65c710557eda5b06e6e59b9291b75d7d
 .git/info/exclude,1776959814941,0841f354ce5bda6aba7c2848439e18201772479d26a26106ced5c443157da145
 .git/hooks/update.sample,1776959814939,6a1957323dcdd534fe6b5d80cb8136e322f486641fe0f1ee310c78561e7dcb3c
@@ -177,7 +187,56 @@ README.md,1777259737383,049ce304ac25603427e3e50b60706d6257ee11417d4702f1b6194acf
 .git/hooks/fsmonitor-watchman.sample,1776959814937,6f76d0d17964fee99d8a5c85833d62ddfe02e28fe22779acda1ccf6bd3494dc5
 .git/hooks/commit-msg.sample,1776959814938,c2e6de548eee3869d069fddcc71627b25c6c2dfbb899c13460e2b64520dd4d5f
 .git/hooks/applypatch-msg.sample,1776959814937,85aec6cb825ab54714baab1a14b0a971f3b47b2c8dbe82de9789b6a0d58fca64
-app.js,1777753705104,9add9c391fd5a092b95b9746a5c068a2bf9452f9077feefc66ea2d0f2ce883ec
+.git/objects/da/b9548ea8fdf36c44e35038d1ae11dc0ed1aa5a,1777780526364,2651b7239785ef260dc14fbf43c7dfad60f2ebe3a60a4797bb4677f1caf976f4
+.git/objects/d7/61dae9af4d6f4f8e3263b499aaadd6b0609b9b,1777780562225,03102077c0a506369cc3b46bb2588a8ca8738172731eda17a93687093d093afb
+.git/objects/d8/21636ee9ebee6539af88ea67d26e5ee48241ba,1777763755309,fa1fb085dc3638ec3d7dc13cbb924c10405994362697ae07ec28cf21a901c306
+.git/objects/d0/e06b6199a0b9301cf65b49ff5d34c2b66fbfc1,1777769715025,92f3b3736280191086ba506ef82005878da93b3becd9a354df8ece2f91b90d58
+.git/objects/cc/e112bd402eff4e3b03f72011a33c5c64903ecb,1777764769609,004f2ea5485d6fa10f38ff068d1e1bc7eb9e7792e824d0b170c25b67c26d374a
+.git/objects/b3/a425249b207819e63bf9a2716fd16f63b0f7b7,1777769715025,7f933f4dc5174d427ad3ca0d9666483c4734ed042c508e60a5925ddad32d180c
+.git/objects/af/351e1714b23b06ef237f19896491eb5da10c51,1777763755632,1023afea5b3a05d445d1484225a72becda5352ba63e610d0984810275f1afc7d
+.git/objects/ac/2fdce96466fa9a07e34fda14e70835de7a20a0,1777764286186,b41480b44969130fcc319a8dca9ad629b40cd9b815806d31b8ff3c520fada148
+.git/objects/97/2c213cc4b4ba88723bbdb4077fe9a833b1e864,1777780249931,ec0f4665bd2b6bd8cd265f05f2ba1b5d65d0f55c278af571e43405914dd18606
+.git/objects/8d/700cd76f3fff8a13568099eb934973cb9e4c57,1777769715024,723b20a5b8cea92b32a1debcc568cdbcf3f2d04fc1c5a311023097f079bd6999
+.git/objects/91/99d71d4bf6c60c4c8526f2d43dcd946f741f23,1777780249930,6773e41495e3b5e3ad11483e8f766df1ea71c6ed51715a1d3be72a1cf8de0cd8
+.git/objects/7d/1490ea6a2039db3d1a233b1e0c640d9d6b756a,1777780250156,b5e13b922cb08d303611b32b65ae868828228efdcb74b5b79fcf3043f8bfa6b2
+.git/objects/88/b81a87c324b2a1f416dac8a3a268de00e34974,1777769715011,ccf34515f2ae1518ecbaac92c3865f0ee574082f7a8c7c8e4fff99a81ac74832
+.git/objects/78/b3fb45bfa47d5fa3e21b66252e633b7443b6cd,1777769745823,aef83a986d7e620ab1343b2abf166bb059dad8f3b42f177930fae914b4a08edd
+.git/objects/b5/cae55b286e13373899ab3eb42ca8471627aa67,1777763755524,e080dec29ed5f86ee1ef040fe970895923a09347b79420e1c682a1b314df303a
+.git/objects/6a/6c8de14497f861669da0750a96480b7dc9ceac,1777766629145,f7a87e1779c68099dc30cd269d0d135a97f46bdefc3fd2bb50afe50dd02cc35f
+.git/objects/66/ac764d208c14ac82aa35462a716caffe829dee,1777769745900,765bbd2f0a2c0c03e184f2a12ff10fcf26e66e0a7013ea12ae0b599729657542
+.git/objects/6a/b726777e577ffa2d813593f519b034bdad0c0f,1777765781518,025727c2beb51176811035401a47298a9d1fbc4c80256951e8322974a69a395a
+.git/objects/58/ba00471b6fe86672e86c9768406001f9daf604,1777769715023,a9694f8fb1e7844379c39f1f0466c50aad12f23ca96e0101a50dba8b89d0ca36
+app.js,1777780231406,da99b54518f3632d69922387c77a33ab4624ca232152f333b8a83373ffadae73
+.git/objects/e5/430d2bd457246dbaa5bde85e1c0b8680bf3bc7,1777765257722,e341ffdd2fe5b20d53135a58067c08d5de66b81564ec7364aab556ae8fafaede
+.git/objects/d0/59e321c905b6908f0aab295eb1f97e49a01a15,1777764285992,aaf02852e42765ec35ec0af84030e67915eb0811af4dab2e4f1a9c4c54ec54ea
+.git/objects/88/0a2931e22ad350d294a14ab9a582a4a1487bd7,1777764769425,3c3e9409e4bbe3abdf81d63bbc38fc04e629ceac5e50dad230db0cb78ae4683d
+.git/objects/6b/72963d93e468988232912ae0030207a6676fd0,1777766628904,6ffaf9b33442f659092c3284897585e3d6eb335b08ed94e09d88e8344b9d2b9e
+.git/objects/65/589a0a47a2794846f63d8112b33587a475764a,1777766061477,b587aae7456c8ec31074b4bcda301873a65959389a9cf4ce1838be46a767eae4
+.git/objects/c3/00568eb8d37b3c4a657a97766ef0b0d51486eb,1777769715022,98c68c07041e50b991953e937468b21b9c950b90f07a667416c4fc58cc062772
+.git/objects/95/7ad4a8297fff47dedf8918748a22b6d9a442b2,1777763903196,445ef00d5f073b2b8ceb76ab4b607ca950b177aae9b9627e2662bbf951655cde
+.git/objects/57/55ef2ef5f5c6e1788b0403477589b0cc9b63dd,1777764769530,a36dcd51b5cc2962c21bfa3eb66e22918979376ad0cc996ae5a6c1fab22de57b
+.git/objects/56/268e8f365283e1b0c97509af819413223adc12,1777780250090,7a77a278fab5ba2d687fec26f38353b0a0d2ccd1be13fd272788e5209232d9da
+.git/objects/50/66fb61eee4712af704a20a01a0086df4a93742,1777763947340,97530e32602ac53c1580f65850a53400ddb0d7054576e682df807879d461f8e8
+.git/objects/39/2c71c50d6ccdc2882d55442cfcf9360234efd2,1777765257859,450232205d5a0d1c5d056a1df4a0d0cb621b6ed48f4a6e263d11b4c33d861aef
+.git/objects/23/38ebe975fb6defeb80e72e08f490a02318f88f,1777765257932,f99379e1275d9a2f1b0705be53f0eeead289c359178c4b4c9a8726ef38fe48fa
+.git/objects/4e/62e25cc649cfe15c761b1f333b834fa0f65147,1777763755468,4b247939d54c9d1ded085cb24311ecdd46f1e85784f6987fa2485c1200c814f4
+.git/objects/14/cba362985940f2632a2e86859186bd9770341c,1777763629958,45cd968d0b9b5e3ef1c7a05bc875d5e4913973625444e7feb6a60f3e835164fe
+.git/objects/0d/4340084ea27b3c9e624d927e1df0fb43cd1e32,1777766061758,87868542808b0681f32ad816da8594d5470b4fe6acb16951593066835f0d6047
+.git/objects/0a/73e484dbd536a8b35ce013d910ac9c504d8edb,1777763755529,e08a6e2b6106016cbbc51ef12a928c6b89201887e2fce417efe1c9c025776ecc
+.git/objects/06/5ec53be1e8165c540cca477b511fa82f03d37c,1777763903195,b604621406c56bc6dff3b9581335d055bd616bf83f34737b10960248567336d2
+.git/objects/01/e5e7a8d68d01a31971e082d3cb2cb9927f51e4,1777780562147,1dc8bde4402fdf5b551f985222c83d0b2b1ed8f353286938a7be32fe0547f601
+.git/objects/01/393e7040bcee4fe4bb9906395e13502cbdcf49,1777763947336,d707fb7b14b89f37fca48665cf8140c2a8f356eacdd66bc0363688e8e1c5b61d
+.git/logs/HEAD,1777780562227,76ec3aa9bd72f37e78db6299ecabe2d481271d2897196a490d635bf2ba15756e
+.git/logs/refs/remotes/origin/main,1777780602151,487b17af378ee82e4e8d3dd850cfa08cb75985e31a0bed38452c210689fb0b24
+.git/logs/refs/heads/main,1777780562227,2a25f389e753f872d9758408692a2f5af1c4de0562aa104c53030c852755e98e
+.claude/settings.local.json,1777763767677,01ad171b5e9509248f44db41241ef2135df482a42c694685cfcf3e3e45594949
+.git/logs/refs/heads/fix-push,1777763629960,7acee2e18794c69c4da7a22e0371cb7b4edc39462a5d44512f15165434e3a9cc
+.git/objects/31/88c8b0d0d1d5bee836f1d02a5c5d756570a80a,1777769715011,ae966a17b34b63ba04f9a34180a6a763b2402005f4b94324a47417f957f74062
+.git/objects/18/93fb0c9ffdfa9df6854810990692fe21c01751,1777765781395,ea2c8f536ab19b325230e71bf9c23114231c2cd5dd6725cf4ab98471436ff2fe
+repomix-output.xml,1777764087230,1c486626afda172b503eed691167f997082fcb3cb7e508b28c34f1a5736c697c
+.git/objects/48/d61b9d5f387921fbabc8e8ecf77b3c606a8f99,1777763903195,d67e333468ffa06190c3d53419a4a6a166f79df041e08d9305dfd97af8402b2b
+.git/objects/41/bb015308754adf0acc38d81fd5f19763ce9608,1777780249930,562abbb82e2682fccab6d7638ac9fbe4ea62f6d16513321b4af7eb103906a63e
+.git/index,1777780562218,f48a40a8e8fd12469d5b320ffe18a320958f82bb86309ffb64d3d4be23523d16
 </file>
 
 <file path=".github/workflows/deploy-hosting.yml">
@@ -220,8 +279,8 @@ jobs:
 </file>
 
 <file path="app.js">
-import { collection, addDoc, getDocs, getDocsFromServer, getDoc, getDocFromCache, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // Helper function to get user-scoped collection path
@@ -334,77 +393,56 @@ function showProfileModal(){
 async function loadUserProfile(uid){
   try{
     if(!uid) return null;
+
+    // Always try localStorage first for instant render — overwrite below if Firestore responds
+    const lsKey = getProfileStorageKey(uid);
+    let localProfile = null;
+    try{
+      const raw = localStorage.getItem(lsKey);
+      if(raw){ const p = normalizeProfile(JSON.parse(raw)); if(p.name) localProfile = p; }
+    }catch(e){}
+
     if(window.db){
       const docRef = doc(window.db, 'users', uid);
-      
-      // Try getDocFromServer first (bypasses offline detection)
-      try{
-        const snap = await getDocFromServer(docRef);
-        if(snap.exists()){
-          const data = snap.data() || {};
-          const profile = normalizeProfile(data.profile || {});
-          if(profile.name){
-            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
-            return profile;
-          }
-        }
-      }catch(e){
-        console.warn('loadUserProfile getDocFromServer failed', e);
-      }
-      
-      // Fallback: try regular getDoc
+      // getDoc: uses cache when offline, hits server when online — never throws on connectivity
       try{
         const snap = await getDoc(docRef);
         if(snap.exists()){
-          const data = snap.data() || {};
-          const profile = normalizeProfile(data.profile || {});
+          const profile = normalizeProfile((snap.data() || {}).profile || {});
           if(profile.name){
-            localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile));
+            localStorage.setItem(lsKey, JSON.stringify(profile));
+            // fire-and-forget server refresh so next load is always fresh
+            getDocFromServer(docRef).then(s2 => {
+              if(s2.exists()){
+                const p2 = normalizeProfile((s2.data() || {}).profile || {});
+                if(p2.name) localStorage.setItem(lsKey, JSON.stringify(p2));
+              }
+            }).catch(()=>{});
             return profile;
           }
         }
       }catch(e){
-        console.warn('loadUserProfile getDoc failed', e);
+        console.warn('loadUserProfile getDoc failed:', e.code || e.message);
       }
-      
-      // Fallback: try cache
-      try{
-        if(typeof getDocFromCache === 'function'){
-          const cacheSnap = await getDocFromCache(docRef);
-          if(cacheSnap && cacheSnap.exists()){
-            const data2 = cacheSnap.data() || {};
-            const profile2 = normalizeProfile(data2.profile || {});
-            if(profile2.name){
-              console.debug('DEBUG: loadUserProfile - returned from cache for uid=', uid);
-              localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(profile2));
-              return profile2;
-            }
-          }
-        }
-      }catch(e){ console.warn('loadUserProfile cache fallback failed', e); }
     }
-    
-    // Final fallback: read from localStorage only
-    const raw = localStorage.getItem(getProfileStorageKey(uid));
-    if(!raw) return null;
-    const parsed = JSON.parse(raw);
-    const profile = normalizeProfile(parsed || {});
-    if(!profile.name) return null;
-    return profile;
+
+    // Firestore failed or returned no profile — fall back to localStorage
+    return localProfile;
   }catch(e){ console.warn('loadUserProfile', e); return null; }
 }
 
 async function saveUserProfile(uid, profile){
   const cleaned = normalizeProfile(profile || {});
   if(!cleaned.name) return null;
+  // Save locally and update UI immediately — never await Firestore here
   localStorage.setItem(getProfileStorageKey(uid), JSON.stringify(cleaned));
   currentUserProfile = cleaned;
   updateSplashGreeting(cleaned);
-  try{
-    if(window.db && uid){
-      await setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true });
-    }
-  }catch(e){ console.warn('saveUserProfile firestore', e); }
+  // Persist to Firestore in background (fire-and-forget)
+  if(window.db && uid){
+    setDoc(doc(window.db, 'users', uid), { profile: cleaned, profileUpdatedAt: Date.now() }, { merge: true })
+      .catch(e => console.warn('saveUserProfile firestore:', e.code || e.message));
+  }
   return cleaned;
 }
 
@@ -430,20 +468,32 @@ async function openAccountPanel(){
   try{
     const user = window.auth && window.auth.currentUser;
     if(!user) return;
-    const profile = (await loadUserProfile(user.uid)) || currentUserProfile || { name:'', gender:'masc' };
-    currentUserProfile = normalizeProfile(profile);
+
+    // Open the modal immediately with whatever we have — don't await Firestore
+    const instant = currentUserProfile || { name:'', gender:'masc' };
     const nameInput = document.getElementById('profile-name');
     const genderInput = document.getElementById('profile-gender');
-    if(nameInput) nameInput.value = currentUserProfile.name || '';
-    if(genderInput) genderInput.value = currentUserProfile.gender || 'masc';
-    renderAccountInfo(currentUserProfile);
+    if(nameInput) nameInput.value = instant.name || '';
+    if(genderInput) genderInput.value = instant.gender || 'masc';
+    renderAccountInfo(instant);
     const preview = document.getElementById('profile-preview');
-    if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo moreno';
     const liveExample = document.getElementById('profile-live-example');
-    if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    if(liveExample) liveExample.textContent = instant.name ? buildLiveGreeting(instant) : '';
     const modal = document.getElementById('profile-modal');
     if(modal) modal.classList.remove('hidden');
     if(nameInput) setTimeout(()=>{ try{ nameInput.focus(); }catch(e){} }, 50);
+
+    // Refresh from Firestore in background — updates fields if they load later
+    loadUserProfile(user.uid).then(profile => {
+      if(!profile) return;
+      currentUserProfile = normalizeProfile(profile);
+      if(nameInput && document.activeElement !== nameInput) nameInput.value = currentUserProfile.name || '';
+      if(genderInput && document.activeElement !== genderInput) genderInput.value = currentUserProfile.gender || 'masc';
+      renderAccountInfo(currentUserProfile);
+      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+      if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
+    }).catch(()=>{});
   }catch(e){ console.warn('openAccountPanel', e); }
 }
 
@@ -460,6 +510,7 @@ function syncProfilePreview(){
   updateSplashGreeting(profile, true);
   if(message) message.textContent = '';
 }
+window.syncProfilePreview = syncProfilePreview;
 
 function showProfileError(msg){
   const message = document.getElementById('profile-message');
@@ -517,9 +568,9 @@ window.saveWelcomeProfile = async function(){
     await saveUserProfile(user.uid, cleaned);
     renderAccountInfo(cleaned);
     hideProfileModal();
-    showSplashUI();
     updateSplashGreeting(cleaned);
-    try{ const bottomInp = document.getElementById('inp-bottom') || document.getElementById('inp'); if(bottomInp) bottomInp.focus(); }catch(e){}
+    // Go straight to the app — hideSplash shows the bottom bar
+    hideSplash();
   }catch(e){ console.warn('saveWelcomeProfile', e); }
 };
 
@@ -763,21 +814,18 @@ function saveTasks(){
   try{ renderSplashTasks(); }catch(e){}
 }
 
-// Load tasks for a given user (Firestore first, then localStorage fallback)
+// Load tasks for a given user (Firestore first, localStorage fallback)
 async function loadTasksForUser(uid){
   try{
-    // Always clear the in-memory list first so we never keep tasks from the previous account.
     tasks = [];
     activeTimer = null;
-    // Load this user's timer state
     try{ activeTimer = JSON.parse(localStorage.getItem(uid + '_agenda_timer') || 'null'); }catch(e){ activeTimer = null; }
-    // Load this user's aggregates for immediate UI render
     try{ const ex = JSON.parse(localStorage.getItem(uid + '_agenda_aggregates') || 'null'); if(ex) renderAggregatesUI(ex); }catch(e){}
-    try{ console.debug('DEBUG: loadTasksForUser start uid=', uid); }catch(e){}
+
     const key = uid ? (uid + '_agenda_tasks') : getUserLocalStorageKey('agenda_tasks');
     let local = null;
     try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
-    // migrate legacy tasks stored without uid prefix (one-time migration)
+    // one-time migration: move legacy unscoped key to uid-scoped key
     if(uid && (!Array.isArray(local) || !local.length)){
       try{
         const legacy = JSON.parse(localStorage.getItem('agenda_tasks') || 'null');
@@ -785,63 +833,60 @@ async function loadTasksForUser(uid){
           local = legacy;
           localStorage.setItem(key, JSON.stringify(legacy));
           localStorage.removeItem('agenda_tasks');
-          console.log('migrated legacy agenda_tasks to uid-scoped key');
+          console.log('[loadTasksForUser] migrated legacy agenda_tasks →', key);
         }
-      }catch(e){ console.warn('legacy tasks migration failed', e); }
+      }catch(e){ console.warn('[loadTasksForUser] legacy migration failed', e); }
     }
 
+    // ── Firestore fetch ──────────────────────────────────────────
+    // With memory cache (no persistentLocalCache), getDocs() always goes to the server.
+    // Falls back to localStorage when the server is unreachable.
     let remote = null;
     if(window.db && uid){
-      try{
-        const col = getUserCollection('tasks');
-        if(col){
-          let snap = null;
-          try{
-            snap = await getDocsFromServer(col);
-            try{ console.debug('DEBUG: loadTasksForUser server docs=', snap.docs.length); }catch(e){}
-          }catch(serverErr){
-            console.warn('loadTasksForUser getDocsFromServer failed', serverErr);
-            try{
-              snap = await getDocs(col);
-              try{ console.debug('DEBUG: loadTasksForUser fallback getDocs docs=', snap.docs.length); }catch(e){}
-            }catch(fallbackErr){
-              console.warn('loadTasksForUser getDocs fallback failed', fallbackErr);
-            }
-          }
-          if(snap){
-            const arr = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
-            try{ console.debug('DEBUG: loadTasksForUser firestore read docs=', arr.length); }catch(e){}
-            if(Array.isArray(arr)) remote = arr;
-          }
+      const col = getUserCollection('tasks');
+      if(col){
+        try{
+          console.log('[loadTasksForUser] fetching from Firestore…');
+          const snap = await getDocs(col);
+          remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+          console.log('[loadTasksForUser] OK —', remote.length, 'docs');
+        }catch(e){
+          console.warn('[loadTasksForUser] Firestore failed:', e.code || e.message, '— using localStorage');
         }
-      }catch(e){ console.warn('loadTasksForUser firestore read failed', e); }
+      }
     }
 
-    try{ console.debug('DEBUG: loadTasksForUser localCount=', Array.isArray(local)? local.length : 0, ' remoteCount=', Array.isArray(remote)? remote.length : 0, ' storageKey=', key); }catch(e){}
-
-    if(Array.isArray(remote) && remote.length){
-      tasks = remote;
-      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+    // Firestore responded (even with 0 docs = account is empty or genuinely new)
+    if(remote !== null){
+      if(remote.length > 0){
+        tasks = remote;
+        try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        return;
+      }
+      // Server returned 0 docs — if localStorage has data, push it up (first-time migration)
+      if(Array.isArray(local) && local.length){
+        console.log('[loadTasksForUser] Firestore empty, pushing', local.length, 'local tasks up');
+        tasks = local;
+        computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+        saveToFirebase(tasks).catch(e=>console.warn('[loadTasksForUser] initial sync failed', e));
+        return;
+      }
+      // Genuinely empty account
+      tasks = [];
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
       return;
     }
 
+    // Firestore unreachable — use localStorage
     if(Array.isArray(local) && local.length){
+      console.log('[loadTasksForUser] Firestore unreachable, using localStorage —', local.length, 'tasks');
       tasks = local;
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      // push local-only tasks up to Firestore (covers migration from localStorage-only usage)
-      if(window.db) saveToFirebase(tasks).catch(e=>console.warn('initial sync local→firestore', e));
       return;
     }
+  }catch(e){ console.warn('[loadTasksForUser] unexpected error', e); }
 
-    if(Array.isArray(remote)){
-      tasks = remote;
-      try{ localStorage.setItem(key, JSON.stringify(tasks)); }catch(e){}
-      computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
-      return;
-    }
-  }catch(e){ console.warn('loadTasksForUser', e); }
-  // no data -> keep the list empty for this account and render
   tasks = [];
   computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
 }
@@ -1213,6 +1258,25 @@ function deleteTask(i){
   console.debug('deleteTask: removed', removed && removed.name, 'index=', i);
   saveTasks(); renderCal(); renderTasks();
   try{ saveEventAndLearning('task.delete', { index: i, task: removed }); }catch(e){}
+  deleteTaskAttachment(removed);
+}
+
+function deleteTaskAttachment(task){
+  if(!task) return;
+  const urls = [];
+  if(task.attachment) urls.push(task.attachment);
+  if(Array.isArray(task.attachments)) task.attachments.forEach(u=>{ if(u && !urls.includes(u)) urls.push(u); });
+  if(!urls.length) return;
+  try{
+    const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
+    if(!st) return;
+    urls.forEach(url=>{
+      try{
+        const sref = storageRef(st, url);
+        deleteObject(sref).catch(e=>console.warn('deleteObject failed', url, e));
+      }catch(e){ console.warn('deleteTaskAttachment ref error', e); }
+    });
+  }catch(e){ console.warn('deleteTaskAttachment', e); }
 }
 
 function exportTasks(){
@@ -1322,6 +1386,7 @@ window.deleteTask = deleteTask;
 window.exportTasks = exportTasks;
 window.importTasks = importTasks;
 window.showTasksForDate = showTasksForDate;
+window.closeDatePopover = closeDatePopover;
 // expose timer and task actions for legacy inline handlers and external calls
 window.toggleTimer = toggleTimer;
 window.markTaskDone = markTaskDone;
@@ -1747,7 +1812,8 @@ async function uploadPendingAttachment(att, persist = true){
           });
           return;
         }
-        att.statusEl.textContent = 'Enviando...';
+        try{ if(att.statusEl) att.statusEl.textContent = 'Enviando...'; }catch(e){}
+        if(!att.sref || !att.file){ resolve({ error: 'missing-ref-or-file' }); return; }
         const uploadTask = uploadBytesResumable(att.sref, att.file, { contentType: att.mime || 'application/octet-stream' });
         att.uploadTask = uploadTask;
         uploadTask.on('state_changed', (snap)=>{
@@ -1842,14 +1908,17 @@ async function sendMsg(){
   }catch(e){ console.warn('clear inputs after send', e); }
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
-    // accept more verbs (e.g. "tirar", "retirar") and optional articles/plural before the target
-    const delMatch = text.match(/^\s*(remover|remova|excluir|exclua|apagar|deletar|tirar|retirar)\s+(?:as?\s+)?(?:tarefas?\s+)?(.+)$/i);
+    // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:(?:d[oae]s?\s+)?dia\s+)?(?:d[oae]s?\s+)?(.+)$/i);
     if(delMatch){
-      const target = delMatch[2].trim();
+      const target = delMatch[1].trim();
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
       try{
         const dateTarget = parsePortugueseDate(target);
-        if(dateTarget){
+        // only treat as a date-removal if the target is PURELY a date expression
+        // (no extra words before the date keyword). "amanhã" → delete. "lixo amanhã" → fall through to AI.
+        const isPureDate = dateTarget && /^(?:\d{1,2}\/\d{1,2}(?:\/\d{2,4})?|\d{4}-\d{2}-\d{2}|hoje|amanh[ãa]|domingo|segunda(?:-feira)?|ter[çc]a(?:-feira)?|quarta(?:-feira)?|quinta(?:-feira)?|sexta(?:-feira)?|s[áa]bado)$/i.test(target.trim());
+        if(isPureDate){
           const matched = tasks.filter(t=>t.date===dateTarget);
           console.debug('delete-intercept: date removal for', dateTarget, 'matched=', matched.length);
           if(!matched.length){
@@ -1893,8 +1962,8 @@ async function sendMsg(){
           }
 
           const removedNames = removed.map(m=>m.name || '—');
-          // ensure the user's command isn't left in chat
           removeUserMessage(text);
+          removed.forEach(r => deleteTaskAttachment(r));
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
           addMsg('ai', `Removidas ${removedNames.length} tarefas relacionadas a ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
           try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
@@ -1908,42 +1977,35 @@ async function sendMsg(){
       const norm = normalizeName(target);
       const candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
       if(candidates.length===0){
-          // debug
-          console.debug('delete-intercept: no candidates for', target, 'tasksLoaded=', tasks.length);
-          // if nothing matched, offer available task names to help the user
-          const available = tasks.map(t=>t.name || '—').slice(0,8).join('\n');
-          addMsg('ai', `Não encontrei nenhuma tarefa com "${target}". Tarefas disponíveis:\n${available}\n\nTente usar o nome completo ou diga: "remover tarefa NOME_DA_TAREFA".`);
-        // clear input and re-enable buttons
-        inpElem.value=''; inpElem.style.height='42px';
-        const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-        if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-        return;
-      }
-      if(candidates.length===1){
-          const idx = candidates[0].i; const name = candidates[0].t.name;
+          // No matching task found — fall through to AI so natural phrases like
+          // "tirar o lixo amanhã" are treated as task additions, not failed deletions.
+          console.debug('delete-intercept: no candidates for', target, '— falling through to AI');
+          // do NOT return; let the rest of sendMsg handle it as a normal AI message
+      } else {
+        if(candidates.length===1){
+          const idx = candidates[0].i; const taskRemoved = candidates[0].t; const name = taskRemoved.name;
           console.debug('delete-intercept: removing single candidate', name, 'index=', idx);
-          // remove user message from chat so the command doesn't stay visible
           removeUserMessage(text);
           tasks.splice(idx,1);
+          deleteTaskAttachment(taskRemoved);
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
           addMsg('ai', `Tarefa removida: ${name}`);
-          // persist event
-          try{ saveEventAndLearning('task.delete', { index: idx, task: candidates[0].t }); }catch(e){}
-        inpElem.value=''; inpElem.style.height='42px';
-        const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-        if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-        return;
-      }
-        // multiple candidates -> ask for clarification listing names (avoid numeric selection)
+          try{ saveEventAndLearning('task.delete', { index: idx, task: taskRemoved }); }catch(e){}
+          inpElem.value=''; inpElem.style.height='42px';
+          const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
+          if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
+          return;
+        }
+        // multiple candidates -> ask for clarification
         console.debug('delete-intercept: multiple candidates for', target, candidates.map(c=>c.t.name));
-        // remove user message from chat as we are replying with clarification
         removeUserMessage(text);
         const list = candidates.map(c=>`- ${c.t.name} (${c.t.date}${c.t.time? ' '+c.t.time:''})`).join('\n');
         addMsg('ai', `Encontrei várias tarefas parecidas com "${target}". Por favor, diga o nome completo ou detalhe a tarefa que quer remover:\n${list}`);
-      inpElem.value=''; inpElem.style.height='42px';
-      const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
-      if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
-      return;
+        inpElem.value=''; inpElem.style.height='42px';
+        const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
+        if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
+        return;
+      }
     }
   }catch(e){ console.warn('delete-intercept', e); }
   inpElem.value=''; inpElem.style.height='42px';
@@ -2080,6 +2142,7 @@ Contexto histórico (opcional):\n${aggSummary}
 Regras importantes de comportamento:
 - Nunca interprete uma mensagem que contenha apenas um ou poucos dígitos (por exemplo: "1", "2") como uma seleção de menu automática. Se o usuário enviar apenas um número, trate isso como texto ambíguo e peça um pequeno esclarecimento antes de executar qualquer ação.
 - Não solicite que o usuário responda escolhendo números. Prefira instruções em texto ou passos em linhas separadas.
+- IMPORTANTE: Você NÃO tem a capacidade de deletar, remover ou excluir tarefas. Se o usuário pedir para remover/excluir/apagar uma tarefa, responda EXATAMENTE com esta mensagem (nada mais): "Para remover, escreva diretamente no chat:\n• remover [nome da tarefa]\n• remover [data, ex: 27/05]\nA remoção é imediata, sem confirmação." Retorne [] no JSON.
 
 Seu trabalho:
 1. Entender o que precisa ser feito
@@ -2156,7 +2219,7 @@ ${tasksSummary}`;
                 const parsed = parsePortugueseDate(text);
                 if(parsed) t.date = parsed;
               }
-              if(!t.attachment && attachmentUrls.length && /prova|exame|avalia[çc][aã]o/i.test(text)){
+              if(!t.attachment && attachmentUrls.length){
                 t.attachment = attachmentUrls[0];
               }
             }catch(e){ }
@@ -2402,31 +2465,36 @@ window.triggerImportAny = triggerImportAny;
 async function saveToFirebase(tasksList){
   try{
     if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase save');
+      console.warn('saveToFirebase: not authenticated, skipping');
       return;
     }
+    const uid = window.auth.currentUser.uid;
     const col = getUserCollection('tasks');
     if (!col) return;
-    const existing = await getDocs(col);
-    const batch = writeBatch(window.db);
-    // delete existing docs
-    for(const d of existing.docs){
-      batch.delete(d.ref);
+
+    // Write localStorage first — network failure must never lose data
+    try{ localStorage.setItem(uid + '_agenda_tasks', JSON.stringify(tasksList)); }catch(e){}
+
+    // Read existing docs to delete them (memory cache → goes to server)
+    let existingDocs = [];
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){
+      console.warn('[saveToFirebase] could not read existing docs:', e.code || e.message);
     }
-    // add new docs with generated ids
+
+    const batch = writeBatch(window.db);
+    for(const d of existingDocs) batch.delete(d.ref);
     for(const t of tasksList){
       const data = Object.assign({}, t);
-      if(data._id) delete data._id;
+      delete data._id;
       if(t._id){
-        const ref = doc(window.db, 'users', window.auth.currentUser.uid, 'tasks', t._id);
-        batch.set(ref, data);
+        batch.set(doc(window.db, 'users', uid, 'tasks', t._id), data);
       } else {
-        const newRef = doc(col);
-        batch.set(newRef, data);
+        batch.set(doc(col), data);
       }
     }
     await batch.commit();
-  }catch(e){ console.error('saveToFirebase', e); }
+    console.log('[saveToFirebase] committed', tasksList.length, 'tasks');
+  }catch(e){ console.error('[saveToFirebase] failed:', e.code || e.message); }
 }
 
 // save an arbitrary event (non-blocking)
@@ -2545,31 +2613,7 @@ setTimeout(()=>{
   }catch(e){ console.warn('wire spinner buttons', e); }
 }, 120);
 
-async function loadFromFirebase(){
-  try{
-    if (!window.auth || !window.auth.currentUser) {
-      console.warn('Not authenticated, skipping Firebase load');
-      return;
-    }
-    try{ console.debug('DEBUG: loadFromFirebase start uid=', window.auth.currentUser && window.auth.currentUser.uid); }catch(e){}
-    const col   = getUserCollection('tasks');
-    if (!col) return;
-    let snap = null;
-    try{
-      snap = await getDocsFromServer(col);
-      try{ console.debug('DEBUG: loadFromFirebase server docs=', snap.docs.length); }catch(e){}
-    }catch(serverErr){
-      console.warn('loadFromFirebase getDocsFromServer failed', serverErr);
-      snap = await getDocs(col);
-    }
-    // preserve Firestore id in _id so we can sync edits/deletes later
-    tasks = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
-    try{ console.debug('DEBUG: loadFromFirebase loaded tasks=', tasks && tasks.length); }catch(e){}
-    renderCal();
-    renderTasks();
-    try{ renderSplashTasks(); }catch(e){}
-  }catch(e){ console.error('loadFromFirebase', e); }
-}
+
 // Load messages from Firestore for current user
 async function loadMessagesFromFirebase(){
   try{
@@ -2583,20 +2627,8 @@ async function loadMessagesFromFirebase(){
 }
 
 // If Firebase is configured, load tasks automatically from Firestore on init
-if(window.db){
-  try{
-    // only auto-load from Firebase if there are no local tasks AND a user is signed in
-    if(window.auth && window.auth.currentUser){
-      if(!tasks || tasks.length===0){
-        loadFromFirebase().catch(e=>console.warn('auto loadFromFirebase', e));
-      } else {
-        console.debug('Local tasks present; skipping auto loadFromFirebase to avoid overwriting.');
-      }
-    } else {
-      console.debug('No authenticated user; skipping auto loadFromFirebase.');
-    }
-  }catch(e){ console.warn('loadFromFirebase init', e); }
-}
+// Tasks are loaded exclusively via handleAuthStateChange → loadTasksForUser
+// after Firebase Auth resolves. No auto-load here.
 
 // ── init ──────────────────────────────────────────────────────────
 // splash control: show splash by default; user can type or skip
@@ -2814,6 +2846,23 @@ window.performLogout = async function(){
         "destination": "/index.html"
       }
     ]
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  }
+}
+</file>
+
+<file path="firestore.rules">
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
   }
 }
 </file>
@@ -2861,7 +2910,7 @@ window.performLogout = async function(){
 
   // ── FIREBASE (CDN imports + config) ─────────────────────
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { initializeFirestore, persistentLocalCache } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+  import { getFirestore } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
   import { getStorage } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
   import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, signOut, onAuthStateChanged, setPersistence, browserLocalPersistence } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -2875,9 +2924,7 @@ window.performLogout = async function(){
     measurementId: "G-CV2BKY24KN"
   };
   const app = initializeApp(firebaseConfig);
-  const db  = initializeFirestore(app, {
-    localCache: persistentLocalCache()
-  });
+  const db  = getFirestore(app); // memory cache — getDocs always goes to server, works in anon tabs
   const storage = getStorage(app);
 
   const auth = getAuth(app);
@@ -2934,10 +2981,6 @@ window.performLogout = async function(){
     const bottom = document.getElementById('bottom-ia-bar');
     if(bottom) bottom.style.display = 'block';
 
-    const el = document.getElementById('firebase-debug');
-    if(el){
-      el.textContent = `Firebase auth: ${user.email} (uid=${user.uid})`;
-    }
     // let app.js load user-specific tasks and state
     try{ if(window.handleAuthStateChange) window.handleAuthStateChange(user); }catch(e){ console.warn('handleAuthStateChange call failed', e); }
   });
@@ -3086,8 +3129,6 @@ window.performLogout = async function(){
   </span>
 </div>
 
-<!-- Firebase debug (auth / bucket) -->
-<div id="firebase-debug" style="position:fixed;left:12px;bottom:12px;background:rgba(0,0,0,0.6);color:#fff;padding:6px 8px;border-radius:6px;font-size:12px;z-index:9999">Firebase auth: inicializando…</div>
 
 <!-- AUTH CONTAINER (shown when not authenticated) -->
 <div id="auth-container" style="position:fixed;top:0;left:0;width:100%;height:100%;background:linear-gradient(180deg,#080808,#0a0a0b);align-items:center;justify-content:center;z-index:9998;padding:20px;flex-direction:column">
@@ -3159,7 +3200,7 @@ window.performLogout = async function(){
       <div id="splash-replies" class="splash-replies"></div>
     </div>
     <div class="splash-actions">
-      <button type="button" class="cal-nav splash-attach" id="splash-attach-btn" aria-label="Anexar arquivo" onclick="triggerImportAny()">
+      <button type="button" class="cal-nav splash-attach" id="splash-attach-btn" aria-label="Anexar arquivo">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M21.44 11.05l-8.49 8.49a5.5 5.5 0 0 1-7.78-7.78l8.49-8.49a3.5 3.5 0 0 1 4.95 4.95l-8.49 8.49a2.5 2.5 0 0 1-3.54-3.54l7.07-7.07" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
@@ -3270,9 +3311,9 @@ window.performLogout = async function(){
   <div class="right-col">
 
     <!-- toolbar -->
-    <div style="display:flex;gap:8px;align-items:center;padding:6px 0 12px;">
+    <div class="app-toolbar">
       <button type="button" class="cal-nav" onclick="exportPDF()">Exportar PDF</button>
-      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+      <div class="toolbar-right">
         <button type="button" class="cal-nav" onclick="openAccountPanel()">Minha conta</button>
         <button type="button" class="cal-nav" onclick="handleLogout()">Sair</button>
       </div>
@@ -3504,6 +3545,20 @@ Próximos passos sugeridos
 
 ---
 Feito rapidamente para prototipagem. Se quiser, eu implemento os próximos passos sugeridos automaticamente.
+</file>
+
+<file path="storage.rules">
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /attachments/{allPaths=**} {
+      allow read, write: if request.auth != null;
+    }
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
 </file>
 
 <file path="styles.css">
@@ -3776,10 +3831,181 @@ body {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
+/* ── toolbar ── */
+.app-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 0 12px;
+  flex-wrap: wrap;
+}
+.toolbar-right {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
 /* ── responsive ── */
+
+/* Tablet (≤ 900px) */
+@media (max-width: 900px) {
+  body { padding: 20px 10px 100px; }
+
+  .app {
+    grid-template-columns: 1fr;
+    max-width: 100%;
+    gap: 14px;
+  }
+
+  .app.single-column {
+    width: calc(100% - 20px);
+  }
+
+  .app > .chat-col { order: 2; }
+  .app > .right-col { order: 1; }
+
+  .right-col {
+    padding: 14px;
+  }
+}
+
+/* Mobile (≤ 600px) */
 @media (max-width: 600px) {
-  .app { grid-template-columns: 1fr; }
-  .right-col { display: none; }
+  body {
+    padding: 12px 8px 110px;
+    font-size: 14px;
+  }
+
+  #setup-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    font-size: 12px;
+  }
+
+  .app,
+  .app.single-column {
+    width: 100%;
+    gap: 10px;
+  }
+
+  .right-col {
+    padding: 10px 8px;
+    gap: 12px;
+  }
+
+  /* toolbar */
+  .app-toolbar { padding: 4px 0 10px; gap: 6px; }
+  .toolbar-right { margin-left: 0; width: 100%; justify-content: flex-end; }
+
+  /* hide debug badge on mobile */
+  #firebase-debug { display: none; }
+
+  /* calendar: smaller cells */
+  .cal-day {
+    min-height: 52px;
+    padding: 4px 2px;
+    border-radius: 6px;
+  }
+  .cal-day .day-number {
+    font-size: 10px;
+    margin-bottom: 2px;
+  }
+  /* hide mini-task labels inside calendar on small phones */
+  .cal-day .mini-task {
+    display: none;
+  }
+  /* but keep the dot indicator */
+  .cal-day.has-task::after {
+    width: 4px;
+    height: 4px;
+    bottom: 3px;
+  }
+  .cal-day .more-count {
+    display: none;
+  }
+  .cal-dow {
+    font-size: 10px;
+    padding: 4px 0;
+  }
+
+  /* task cards: wrap action buttons */
+  .task-card > div:first-child {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .task-card .cal-nav,
+  .task-card .cal-nav.small {
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+
+  /* stats */
+  .stat-val { font-size: 16px; }
+
+  /* splash */
+  .splash-card {
+    width: 97%;
+    padding: 14px 12px;
+  }
+  .splash-header h2 { font-size: 15px; }
+  .splash-actions {
+    gap: 6px;
+  }
+  .splash-actions .cal-nav {
+    padding: 8px 10px;
+    font-size: 13px;
+  }
+
+  /* modals */
+  .modal-card {
+    width: 94%;
+    padding: 14px;
+  }
+  .popover-card {
+    width: 96%;
+    padding: 12px;
+  }
+  .popover-body {
+    max-height: 240px;
+  }
+  .popover-item {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .popover-item > div:last-child {
+    align-self: flex-end;
+  }
+
+  /* profile modal */
+  .profile-card {
+    width: 96%;
+    padding: 14px;
+  }
+
+  /* attachment panel */
+  .attachment-preview {
+    flex-wrap: wrap;
+  }
+  .attachment-progress-outer {
+    width: 100%;
+  }
+  .attachment-meta {
+    min-width: 0;
+    flex: 1;
+  }
+
+  /* section titles */
+  .section-title { font-size: 9px; }
+
+  /* bottom bar */
+  .bottom-input-wrap textarea {
+    font-size: 13px;
+  }
+
 }
 
 /* bottom floating IA bar */
@@ -3864,13 +4090,29 @@ body {
 .bottom-send { width:42px; height:36px; border-radius:10px; border:none; background: linear-gradient(135deg,var(--accent),var(--accent2)); display:flex; align-items:center; justify-content:center; box-shadow: 0 8px 24px rgba(79,142,247,0.16); cursor:pointer; margin-left: 2px; z-index: 6; }
 .bottom-send:active{ transform: scale(.98); }
 
-@media (max-width: 700px){ .bottom-ia{ left: 8px; right: 8px; transform:none; width: calc(100% - 16px);} }
+@media (max-width: 700px) {
+  .bottom-ia {
+    left: 8px;
+    right: 8px;
+    transform: translateY(8px);
+    width: calc(100% - 16px);
+  }
+  .bottom-ia.visible {
+    transform: translateY(0);
+    animation: bottom-in-mobile .32s cubic-bezier(.2,.9,.2,1);
+  }
+}
 
 @keyframes bar-in { from { opacity: 0; transform: translateY(12px) translateX(-50%);} to { opacity:1; transform: translateY(0) translateX(-50%);} }
 
 @keyframes bottom-in {
   from { opacity: 0; transform: translateY(8px) translateX(-50%) scale(.985); }
   to { opacity: 1; transform: translateY(0) translateX(-50%) scale(1); }
+}
+
+@keyframes bottom-in-mobile {
+  from { opacity: 0; transform: translateY(8px) scale(.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* SPLASH styles */
@@ -3904,11 +4146,29 @@ body {
 
 @keyframes splash-in { from { opacity:0; transform: translateY(28px) scale(.98);} to { opacity:1; transform: translateY(0) scale(1);} }
 
-/* complete modal */
-.modal-card { width: 360px; max-width: 92%; background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04)); border:1px solid rgba(255,255,255,0.12); padding:16px; border-radius:12px; box-shadow: 0 30px 80px rgba(0,0,0,0.85); }
-#complete-modal, #logout-modal { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: rgba(2,8,23,0.85); z-index:1300; }
-/* hide when JS toggles the 'hidden' class */
-#complete-modal.hidden { display: none; }
+/* modals overlay */
+.modal-card {
+  width: min(420px, 94vw);
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.85);
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+#complete-modal, #logout-modal, #edit-task-modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2,8,23,0.85);
+  z-index: 1300;
+  padding: 16px;
+}
+#complete-modal.hidden, #edit-task-modal.hidden { display: none; }
+/* edit task form: inputs fill width */
+#edit-task-form .profile-field input,
+#edit-task-form .profile-field select { width: 100%; }
+#edit-task-add-attachment { width: 100%; max-width: 100%; }
 .modal-card h3 { margin:0 0 8px 0; font-size:16px; }
 .modal-row { display:flex; gap:8px; align-items:center; margin-top:10px; }
 .modal-row input[type=number] { flex:1; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); color:var(--text); }

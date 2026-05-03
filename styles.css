@@ -382,18 +382,9 @@ body {
   .stat-val { font-size: 16px; }
 
   /* splash */
-  .splash-card {
-    width: 97%;
-    padding: 14px 12px;
-  }
+  .splash-card { width: 96%; padding: 16px 14px 14px; gap: 12px; }
   .splash-header h2 { font-size: 15px; }
-  .splash-actions {
-    gap: 6px;
-  }
-  .splash-actions .cal-nav {
-    padding: 8px 10px;
-    font-size: 13px;
-  }
+  .splash-actions .cal-nav { padding: 8px 12px; font-size: 13px; }
 
   /* modals */
   .modal-card {
@@ -552,27 +543,76 @@ body {
 }
 
 /* SPLASH styles */
-#splash.splash-overlay { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: linear-gradient(180deg, rgba(2,8,23,0.8), rgba(2,8,23,0.95)); z-index: 1200; }
-.splash-card { position: relative; width: min(720px,94%); max-width: 720px; background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); border: 1px solid rgba(255,255,255,0.03); border-radius: 14px; padding: 18px; box-shadow: 0 30px 80px rgba(2,8,23,0.7); transform: translateY(18px); animation: splash-in .45s cubic-bezier(.2,.9,.2,1);
+#splash.splash-overlay {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, rgba(2,8,23,0.82), rgba(2,8,23,0.96));
+  z-index: 1200;
 }
-.splash-header { display:flex; align-items:center; gap:12px; margin-bottom:8px; }
-.splash-header .logo { width:44px; height:44px; display:flex; align-items:center; justify-content:center; border-radius:10px; background: linear-gradient(135deg,var(--accent),var(--accent2)); box-shadow: 0 8px 28px rgba(79,142,247,0.12); font-size:18px; }
-.splash-header h2 { font-size:18px; margin:0; }
-.splash-body { margin-bottom:12px; }
-.splash-body .splash-msg { color: var(--muted); margin-bottom:10px; }
-.splash-body textarea { width:100%; min-height:64px; max-height:160px; resize:none; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); color:var(--text); font-family:var(--font); }
-.splash-actions { display:flex; justify-content:flex-end; gap:10px; flex-wrap:wrap; }
-.splash-actions .cal-nav { padding:10px 14px; border-radius:10px; }
-.splash-attach { display:inline-flex; align-items:center; gap:8px; }
-.splash-attach svg { flex-shrink:0; }
-.splash-replies { margin-top:10px; display:flex; flex-direction:column; gap:8px; max-height:160px; overflow:auto; }
 
-/* small circular close button positioned at top-right of splash card */
-.splash-close { position: absolute; top: 10px; right: 10px; width:36px; height:36px; padding:0; display:flex; align-items:center; justify-content:center; border-radius:50%; font-size:14px; background: rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04); }
-.splash-close:hover { background: rgba(255,255,255,0.04); }
+.splash-card {
+  width: min(520px, 92%);
+  background: linear-gradient(180deg, rgba(255,255,255,0.025), rgba(255,255,255,0.01));
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: 16px;
+  padding: 22px 22px 18px;
+  box-shadow: 0 32px 80px rgba(2,8,23,0.75), 0 0 0 1px rgba(79,142,247,0.06);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  animation: splash-in .4s cubic-bezier(.2,.9,.2,1);
+}
 
-/* splash pending tasks */
-.splash-tasks { margin-top:10px; display:flex; flex-direction:column; gap:8px; max-height:160px; overflow:auto; }
+.splash-header {
+  display: flex; align-items: center; gap: 12px;
+}
+.splash-header .logo { width:36px; height:36px; display:flex; align-items:center; justify-content:center; border-radius:10px; background: linear-gradient(135deg,var(--accent),var(--accent2)); box-shadow: 0 6px 18px rgba(79,142,247,0.18); font-size:16px; flex-shrink:0; }
+.splash-header h2 { font-size:16px; font-weight:500; margin:0; flex:1; }
+.splash-close { background: rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.06); width:30px; height:30px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:13px; cursor:pointer; flex-shrink:0; padding:0; color:var(--muted); transition: background .12s; }
+.splash-close:hover { background: rgba(255,255,255,0.07); color:var(--text); }
+
+.splash-tabs {
+  display: flex;
+  gap: 6px;
+}
+.splash-tab {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.02);
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.splash-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.splash-tab.active {
+  background: rgba(79,142,247,0.12);
+  border-color: rgba(79,142,247,0.25);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.splash-card textarea {
+  width:100%; min-height:72px; max-height:160px;
+  resize:none; padding:12px 14px; border-radius:12px;
+  border:1px solid rgba(255,255,255,0.05);
+  background: rgba(255,255,255,0.03);
+  color:var(--text); font-family:var(--font); font-size:14px; line-height:1.5;
+  transition: border-color .15s, box-shadow .15s;
+}
+.splash-card textarea:focus { outline:none; border-color:rgba(79,142,247,0.35); box-shadow: 0 8px 24px rgba(79,142,247,0.07); }
+.splash-card textarea::placeholder { color: var(--muted); }
+
+.splash-actions { display:flex; justify-content:flex-end; gap:8px; align-items:center; }
+.splash-actions .cal-nav { padding:8px 16px; border-radius:10px; font-size:13px; }
+.splash-send { background: linear-gradient(135deg,var(--accent),var(--accent2)) !important; border-color: transparent !important; color: white !important; font-weight:500 !important; box-shadow: 0 4px 14px rgba(79,142,247,0.3); }
+.splash-send:hover { opacity:.9; }
+
+/* kept hidden for JS compat */
+.splash-tasks, .splash-replies { display:none !important; }
 .splash-task { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; background: rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.02); border-radius:8px; }
 .splash-task-row { display:flex; flex-direction:column; gap:4px; }
 .splash-task-name { font-weight:600; font-size:14px; color:var(--text); }
@@ -593,6 +633,99 @@ body {
   max-height: 90dvh;
   overflow-y: auto;
 }
+/* ── app tabs ── */
+#app-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 0 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 14px;
+}
+
+.app-tab {
+  padding: 6px 16px;
+  border-radius: 8px 8px 0 0;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--font);
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  margin-bottom: -1px;
+}
+
+.app-tab:hover { color: var(--text); }
+
+.app-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: rgba(79, 142, 247, 0.06);
+}
+
+/* ── recipe cards ── */
+.recipe-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005));
+  border: 1px solid rgba(255,255,255,0.02);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  transition: box-shadow .12s, transform .08s;
+}
+.recipe-card:hover { transform: translateY(-2px); box-shadow: 0 10px 28px rgba(0,0,0,0.5); }
+.recipe-card-info { flex: 1; min-width: 0; }
+.recipe-card-name { font-size: 14px; font-weight: 500; color: var(--text); }
+.recipe-card-meta { font-size: 12px; color: var(--muted); margin-top: 2px; font-family: var(--mono); }
+.recipe-tags { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.recipe-tag {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(79,142,247,0.12);
+  color: var(--accent);
+}
+
+/* recipe modal body */
+.recipe-section-title {
+  font-size: 11px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  font-family: var(--mono);
+  margin: 12px 0 6px;
+}
+.recipe-modal-list {
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text);
+}
+.recipe-history-item {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.02);
+  margin-bottom: 4px;
+}
+
+/* recipe modal positioning */
+#recipe-modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2,8,23,0.85);
+  z-index: 1300;
+  padding: 16px;
+}
+#recipe-modal.hidden { display: none; }
+
 #complete-modal, #logout-modal, #edit-task-modal {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;

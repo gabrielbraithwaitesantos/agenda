@@ -33,6 +33,10 @@ const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 let tasks = [];
 // tasks are NOT loaded from localStorage at startup — they are loaded after auth in handleAuthStateChange
 
+let recipes = [];
+let currentAppTab = 'agenda'; // 'agenda' | 'culinaria'
+let __currentRecipeId = null;
+
 let vm = (new Date()).getMonth();
 let vy = (new Date()).getFullYear();
 
@@ -632,6 +636,7 @@ window.handleAuthStateChange = async function(user){
       try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
       await loadTasksForUser(user.uid);
       try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
+      await loadRecipesForUser(user.uid);
       try{
         const userMessages = await loadMessagesFromFirebase();
         if(userMessages && userMessages.length > 0){
@@ -644,6 +649,7 @@ window.handleAuthStateChange = async function(user){
     } else {
       // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
       tasks = [];
+      recipes = [];
       currentUserProfile = null;
       hideProfileModal();
       // Clear chat DOM
@@ -1251,10 +1257,6 @@ function renderTasks(){
       }
       return;
     }
-    // debug panel: show counts and first names so user can see what's loaded (only if pending tasks exist)
-    let dbg = document.createElement('div'); dbg.id = 'splash-debug'; dbg.style.fontSize='12px'; dbg.style.color='var(--muted)'; dbg.style.marginTop='8px';
-    try{ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length} — primeiras: ${pending.slice(0,4).map(p=>p.name||'—').join(' | ')}`; }catch(e){ dbg.textContent = `Tarefas totais: ${visible.length} — pendentes: ${pending.length}`; }
-    el.parentNode.insertBefore(dbg, el.nextSibling);
     pending.forEach(t=>{
       const i = tasks.indexOf(t);
       const item = document.createElement('div'); item.className = 'splash-task';
@@ -1373,7 +1375,6 @@ function addMsg(role, text){
       const safeText2 = (text === null || text === undefined) ? '' : String(text);
       spr.innerHTML = `<div class="bubble">${safeText2.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;
       splashReplies.appendChild(spr);
-      splashReplies.scrollTop = splashReplies.scrollHeight;
     }
   }catch(e){}
 
@@ -1827,6 +1828,14 @@ async function sendMsg(){
     if(sendBtn) sendBtn.disabled = false;
     return;
   }
+  // ─── Culinária mode: delegate to culinaria handler ───────────────
+  if(currentAppTab === 'culinaria'){
+    await sendCulinariaMsg(text);
+    if(sendBtn) sendBtn.disabled = false;
+    return;
+  }
+  // ─────────────────────────────────────────────────────────────────
+
   const thinking = addThinking();
 
   // sem chave configurada → mensagem de ajuda
@@ -2216,6 +2225,291 @@ async function saveToFirebase(tasksList){
   }catch(e){ console.error('[saveToFirebase] failed:', e.code || e.message); }
 }
 
+// ── Culinária: tab switching ─────────────────────────────────────
+window.switchAppTab = function(tab){
+  currentAppTab = tab;
+  const agendaView = document.getElementById('agenda-view');
+  const culinariaView = document.getElementById('culinaria-view');
+  const isCulinaria = tab === 'culinaria';
+
+  // app tabs (main panel)
+  document.getElementById('tab-agenda')?.classList.toggle('active', !isCulinaria);
+  document.getElementById('tab-culinaria')?.classList.toggle('active', isCulinaria);
+
+  // splash tabs
+  document.getElementById('splash-tab-agenda')?.classList.toggle('active', !isCulinaria);
+  document.getElementById('splash-tab-culinaria')?.classList.toggle('active', isCulinaria);
+
+  const agendaPlaceholder = 'Ex: estudar ciberfísico sexta 17:30';
+  const culinariaPlaceholder = 'Ex: hoje fiz frango grelhado com limão, ficou pronto em 30 min';
+  const placeholder = isCulinaria ? culinariaPlaceholder : agendaPlaceholder;
+
+  const inpBottom = document.getElementById('inp-bottom');
+  const inpSplash = document.getElementById('splash-inp');
+  if(inpBottom) inpBottom.placeholder = placeholder;
+  if(inpSplash) inpSplash.placeholder = placeholder;
+
+  if(isCulinaria){
+    if(agendaView) agendaView.style.display = 'none';
+    if(culinariaView) culinariaView.style.display = 'flex';
+    renderRecipeList();
+  } else {
+    if(agendaView) agendaView.style.display = '';
+    if(culinariaView) culinariaView.style.display = 'none';
+  }
+};
+
+// ── Culinária: persistence ────────────────────────────────────────
+async function loadRecipesForUser(uid){
+  try{
+    recipes = [];
+    const key = uid ? (uid + '_agenda_recipes') : 'agenda_recipes';
+    let local = null;
+    try{ local = JSON.parse(localStorage.getItem(key) || 'null'); }catch(e){ local = null; }
+
+    let remote = null;
+    if(window.db && uid){
+      const col = collection(window.db, 'users', uid, 'recipes');
+      try{
+        const snap = await getDocs(col);
+        remote = snap.docs.map(d=>{ const obj = d.data(); obj._id = d.id; return obj; });
+      }catch(e){ console.warn('[loadRecipesForUser] Firestore failed:', e.code || e.message); }
+    }
+
+    if(remote !== null){
+      if(remote.length > 0){
+        recipes = remote;
+        try{ localStorage.setItem(key, JSON.stringify(recipes)); }catch(e){}
+        renderRecipeList(); return;
+      }
+      if(Array.isArray(local) && local.length){
+        recipes = local;
+        saveToFirebaseRecipes(recipes).catch(e=>console.warn('initial recipe sync failed', e));
+        renderRecipeList(); return;
+      }
+      recipes = []; renderRecipeList(); return;
+    }
+    if(Array.isArray(local) && local.length){ recipes = local; }
+    renderRecipeList();
+  }catch(e){ console.warn('[loadRecipesForUser]', e); recipes = []; renderRecipeList(); }
+}
+
+function saveRecipes(){
+  try{
+    const uid = window.auth && window.auth.currentUser && window.auth.currentUser.uid;
+    const key = uid ? (uid + '_agenda_recipes') : 'agenda_recipes';
+    localStorage.setItem(key, JSON.stringify(recipes));
+  }catch(e){ console.warn('saveRecipes localStorage', e); }
+  if(window.db){
+    saveToFirebaseRecipes(recipes).catch(e=>console.error('saveRecipes->Firestore', e));
+  }
+  renderRecipeList();
+}
+
+async function saveToFirebaseRecipes(recipesList){
+  try{
+    if(!window.auth || !window.auth.currentUser) return;
+    const uid = window.auth.currentUser.uid;
+    const col = collection(window.db, 'users', uid, 'recipes');
+    let existingDocs = [];
+    try{ existingDocs = (await getDocs(col)).docs; }catch(e){ console.warn('[saveToFirebaseRecipes] read failed', e.code||e.message); }
+    const batch = writeBatch(window.db);
+    for(const d of existingDocs) batch.delete(d.ref);
+    for(const r of recipesList){
+      const data = Object.assign({}, r); delete data._id;
+      if(r._id){ batch.set(doc(window.db, 'users', uid, 'recipes', r._id), data); }
+      else { batch.set(doc(col), data); }
+    }
+    await batch.commit();
+  }catch(e){ console.error('[saveToFirebaseRecipes]', e.code||e.message); }
+}
+
+// ── Culinária: render ─────────────────────────────────────────────
+function renderRecipeList(filterText){
+  const container = document.getElementById('recipe-list');
+  if(!container) return;
+  const query = (filterText || '').toLowerCase().trim();
+  const list = query
+    ? recipes.filter(r=> (r.name||'').toLowerCase().includes(query) || (r.tags||[]).some(t=>t.toLowerCase().includes(query)))
+    : recipes;
+  if(!list.length){
+    container.innerHTML = '<div class="no-tasks">Nenhuma receita ainda. Descreva um prato no chat!</div>';
+    return;
+  }
+  container.innerHTML = '';
+  list.forEach(r=>{
+    const card = document.createElement('div'); card.className = 'recipe-card';
+    const info = document.createElement('div'); info.className = 'recipe-card-info';
+    const name = document.createElement('div'); name.className = 'recipe-card-name'; name.textContent = r.name || '—';
+    const meta = document.createElement('div'); meta.className = 'recipe-card-meta';
+    const parts = [];
+    if(r.prepTime) parts.push('⏱ ' + r.prepTime + ' min');
+    if(r.history && r.history.length) parts.push('🍴 feito ' + r.history.length + 'x');
+    meta.textContent = parts.join(' · ');
+    info.appendChild(name); info.appendChild(meta);
+    if(r.tags && r.tags.length){
+      const tagWrap = document.createElement('div'); tagWrap.className = 'recipe-tags';
+      r.tags.slice(0,5).forEach(t=>{ const tag = document.createElement('span'); tag.className='recipe-tag'; tag.textContent=t; tagWrap.appendChild(tag); });
+      info.appendChild(tagWrap);
+    }
+    const btn = document.createElement('button'); btn.className='cal-nav small'; btn.textContent='Ver receita';
+    btn.addEventListener('click', ()=> openRecipeModal(r.id || r._id));
+    card.appendChild(info); card.appendChild(btn);
+    container.appendChild(card);
+  });
+}
+window.filterRecipes = function(val){ renderRecipeList(val); };
+
+function openRecipeModal(recipeId){
+  const r = recipes.find(x=> (x.id||x._id) === recipeId);
+  if(!r) return;
+  __currentRecipeId = recipeId;
+  const nameEl = document.getElementById('recipe-modal-name');
+  const bodyEl = document.getElementById('recipe-modal-body');
+  if(nameEl) nameEl.textContent = r.name || '—';
+  if(bodyEl){
+    let html = '';
+    if(r.prepTime) html += `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">⏱ ${r.prepTime} min de preparo</div>`;
+    if(r.ingredients && r.ingredients.length){
+      html += '<div class="recipe-section-title">Ingredientes</div>';
+      html += '<ul class="recipe-modal-list">' + r.ingredients.map(i=>`<li>${i}</li>`).join('') + '</ul>';
+    }
+    if(r.steps && r.steps.length){
+      html += '<div class="recipe-section-title">Modo de Preparo</div>';
+      html += '<ol class="recipe-modal-list">' + r.steps.map(s=>`<li>${s}</li>`).join('') + '</ol>';
+    }
+    if(r.notes){
+      html += '<div class="recipe-section-title">Observações</div>';
+      html += `<div style="font-size:13px;color:var(--text);padding:8px;border-radius:6px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.02)">${r.notes}</div>`;
+    }
+    if(r.tags && r.tags.length){
+      html += '<div class="recipe-section-title">Tags</div>';
+      html += '<div class="recipe-tags">' + r.tags.map(t=>`<span class="recipe-tag">${t}</span>`).join('') + '</div>';
+    }
+    if(r.history && r.history.length){
+      html += '<div class="recipe-section-title">Histórico</div>';
+      html += r.history.map(h=>`<div class="recipe-history-item"><strong>${h.date||''}</strong>${h.obs? ' — '+h.obs : ''}</div>`).join('');
+    }
+    bodyEl.innerHTML = html;
+  }
+  const modal = document.getElementById('recipe-modal');
+  if(modal) modal.classList.remove('hidden');
+}
+window.openRecipeModal = openRecipeModal;
+
+window.closeRecipeModal = function(){
+  const modal = document.getElementById('recipe-modal');
+  if(modal) modal.classList.add('hidden');
+  __currentRecipeId = null;
+};
+
+window.deleteCurrentRecipe = function(){
+  if(!__currentRecipeId) return;
+  const idx = recipes.findIndex(r=> (r.id||r._id) === __currentRecipeId);
+  if(idx === -1) return;
+  const name = recipes[idx].name;
+  recipes.splice(idx, 1);
+  saveRecipes();
+  window.closeRecipeModal();
+  addMsg('ai', `Receita "${name}" removida.`);
+};
+
+// ── Culinária: system prompt builder ─────────────────────────────
+function buildRecipesSummary(){
+  if(!recipes.length) return 'Nenhuma receita salva ainda.';
+  return recipes.slice(0,20).map(r=>{
+    const tags = (r.tags||[]).join(', ');
+    return `- ${r.name}${r.prepTime? ' ('+r.prepTime+' min)' : ''}${tags? ' • '+tags : ''}`;
+  }).join('\n');
+}
+
+function buildCulinariaSystemPrompt(){
+  return `Você é um assistente de culinária conversacional. O usuário descreve em linguagem natural receitas que fez ou quer salvar.
+
+Receitas já salvas:
+${buildRecipesSummary()}
+
+Seu trabalho:
+1. Entender o prato descrito
+2. Extrair ingredientes, modo de preparo e tempo de preparo
+3. Confirmar o que entendeu de forma amigável
+4. Se o usuário mencionar como ficou ou observações, inclua no histórico
+
+Responda em dois blocos separados exatamente por ---RECIPE---
+
+BLOCO 1: resposta amigável em português. Máximo 5 linhas.
+- Confirme o nome do prato
+- Destaque algo legal da receita
+- Tom direto e descontraído
+
+BLOCO 2 (após ---RECIPE---): objeto JSON da receita:
+{"name":"Nome do prato","ingredients":["ingrediente 1","ingrediente 2"],"steps":["Passo 1...","Passo 2..."],"prepTime":30,"tags":["tag1","tag2"],"notes":"Observações opcionais","historyEntry":"Como ficou desta vez (se mencionado)"}
+Se não houver receita para salvar, retorne null no lugar do JSON.`;
+}
+
+// ── Culinária: send message handler ──────────────────────────────
+async function sendCulinariaMsg(text){
+  const thinking = addThinking();
+  if(!window.GROQ_API_KEY || window.GROQ_API_KEY==='COLE_SUA_CHAVE_GROQ_AQUI'){
+    thinking.remove();
+    addMsg('ai','⚠️ Chave Groq não configurada. Configure GROQ_API_KEY.');
+    return;
+  }
+  try{
+    const system = buildCulinariaSystemPrompt();
+    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+window.GROQ_API_KEY },
+      body: JSON.stringify({ model: window.GROQ_MODEL, messages:[{role:'system',content:system},{role:'user',content:text}], temperature:0.5, max_tokens:900 })
+    });
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error.message);
+    const full = data.choices[0].message.content;
+    const parts = full.split('---RECIPE---');
+    const reply = parts[0].trim();
+    let newRecipe = null;
+    if(parts[1]){
+      try{
+        const raw = parts[1].trim().replace(/```json|```/g,'').trim();
+        if(raw !== 'null') newRecipe = JSON.parse(raw);
+      }catch(e){ console.warn('recipe JSON parse failed', e); }
+    }
+    thinking.remove();
+    addMsg('ai', reply);
+    if(newRecipe && newRecipe.name){
+      const existing = recipes.find(r=> r.name.toLowerCase() === newRecipe.name.toLowerCase());
+      if(existing){
+        if(newRecipe.historyEntry){
+          existing.history = existing.history || [];
+          existing.history.push({ date: todayStr(), obs: newRecipe.historyEntry });
+        }
+        if(newRecipe.ingredients && newRecipe.ingredients.length) existing.ingredients = newRecipe.ingredients;
+        if(newRecipe.steps && newRecipe.steps.length) existing.steps = newRecipe.steps;
+        if(newRecipe.prepTime) existing.prepTime = newRecipe.prepTime;
+        if(newRecipe.notes) existing.notes = newRecipe.notes;
+      } else {
+        const rec = {
+          id: 'r_' + Date.now(),
+          name: newRecipe.name,
+          ingredients: newRecipe.ingredients || [],
+          steps: newRecipe.steps || [],
+          prepTime: newRecipe.prepTime || null,
+          tags: newRecipe.tags || [],
+          notes: newRecipe.notes || '',
+          history: newRecipe.historyEntry ? [{ date: todayStr(), obs: newRecipe.historyEntry }] : [],
+          createdAt: new Date().toISOString()
+        };
+        recipes.unshift(rec);
+      }
+      saveRecipes();
+      addMsg('ai', `✅ Receita "${newRecipe.name}" salva!`);
+    }
+  }catch(err){
+    thinking.remove();
+    addMsg('ai','Erro ao conectar com a IA: '+ String(err.message||err));
+  }
+}
+
 // save an arbitrary event (non-blocking)
 async function saveEventToFirebase(type, payload){
   try{
@@ -2509,6 +2803,7 @@ window.performLogout = async function(){
 
     // Clear local state
     tasks = [];
+    recipes = [];
     history = [];
     pendingAttachments = [];
     activeTimer = null;
