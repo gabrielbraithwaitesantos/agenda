@@ -582,11 +582,29 @@ body {
 
 @keyframes splash-in { from { opacity:0; transform: translateY(28px) scale(.98);} to { opacity:1; transform: translateY(0) scale(1);} }
 
-/* complete modal */
-.modal-card { width: 360px; max-width: 92%; background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04)); border:1px solid rgba(255,255,255,0.12); padding:16px; border-radius:12px; box-shadow: 0 30px 80px rgba(0,0,0,0.85); }
-#complete-modal, #logout-modal { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: rgba(2,8,23,0.85); z-index:1300; }
-/* hide when JS toggles the 'hidden' class */
-#complete-modal.hidden { display: none; }
+/* modals overlay */
+.modal-card {
+  width: min(420px, 94vw);
+  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+  border: 1px solid rgba(255,255,255,0.12);
+  padding: 16px;
+  border-radius: 12px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.85);
+  max-height: 90dvh;
+  overflow-y: auto;
+}
+#complete-modal, #logout-modal, #edit-task-modal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(2,8,23,0.85);
+  z-index: 1300;
+  padding: 16px;
+}
+#complete-modal.hidden, #edit-task-modal.hidden { display: none; }
+/* edit task form: inputs fill width */
+#edit-task-form .profile-field input,
+#edit-task-form .profile-field select { width: 100%; }
+#edit-task-add-attachment { width: 100%; max-width: 100%; }
 .modal-card h3 { margin:0 0 8px 0; font-size:16px; }
 .modal-row { display:flex; gap:8px; align-items:center; margin-top:10px; }
 .modal-row input[type=number] { flex:1; padding:8px 12px; border-radius:8px; border:1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); color:var(--text); }

@@ -1921,7 +1921,7 @@ ${tasksSummary}`;
                 const parsed = parsePortugueseDate(text);
                 if(parsed) t.date = parsed;
               }
-              if(!t.attachment && attachmentUrls.length && /prova|exame|avalia[çc][aã]o/i.test(text)){
+              if(!t.attachment && attachmentUrls.length){
                 t.attachment = attachmentUrls[0];
               }
             }catch(e){ }
