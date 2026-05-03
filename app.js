@@ -1,5 +1,5 @@
 import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
-import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
+import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // Helper function to get user-scoped collection path
@@ -977,6 +977,25 @@ function deleteTask(i){
   console.debug('deleteTask: removed', removed && removed.name, 'index=', i);
   saveTasks(); renderCal(); renderTasks();
   try{ saveEventAndLearning('task.delete', { index: i, task: removed }); }catch(e){}
+  deleteTaskAttachment(removed);
+}
+
+function deleteTaskAttachment(task){
+  if(!task) return;
+  const urls = [];
+  if(task.attachment) urls.push(task.attachment);
+  if(Array.isArray(task.attachments)) task.attachments.forEach(u=>{ if(u && !urls.includes(u)) urls.push(u); });
+  if(!urls.length) return;
+  try{
+    const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
+    if(!st) return;
+    urls.forEach(url=>{
+      try{
+        const sref = storageRef(st, url);
+        deleteObject(sref).catch(e=>console.warn('deleteObject failed', url, e));
+      }catch(e){ console.warn('deleteTaskAttachment ref error', e); }
+    });
+  }catch(e){ console.warn('deleteTaskAttachment', e); }
 }
 
 function exportTasks(){
@@ -1512,7 +1531,8 @@ async function uploadPendingAttachment(att, persist = true){
           });
           return;
         }
-        att.statusEl.textContent = 'Enviando...';
+        try{ if(att.statusEl) att.statusEl.textContent = 'Enviando...'; }catch(e){}
+        if(!att.sref || !att.file){ resolve({ error: 'missing-ref-or-file' }); return; }
         const uploadTask = uploadBytesResumable(att.sref, att.file, { contentType: att.mime || 'application/octet-stream' });
         att.uploadTask = uploadTask;
         uploadTask.on('state_changed', (snap)=>{
@@ -1608,9 +1628,9 @@ async function sendMsg(){
   // intercept Portuguese removal commands and handle locally without calling the IA
   try{
     // match optional prefix ("pode ", "quero ", "por favor ") + verb + optional articles + target
-    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|me\s+ajuda\s+a|por\s+favor)\s+)?(remover|remova|excluir|exclua|apagar|deletar|tirar|retirar)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:d[ao]\s+)?(.+)$/i);
+    const delMatch = text.match(/^\s*(?:(?:pode|quero|preciso|vou|vai|tenta|tente|pf|pfv|me\s+ajuda\s+a|por\s+favor)\s+)?(?:exclu(?:ir?|a|i|indo|[ií]do?)|remov(?:er?|a|e|endo)|apag(?:ar?|a|ue?|ando)|delet(?:ar?|a|e|ando)|tira?r?|retira?r?)\s+(?:[ao]s?\s+)?(?:tarefas?\s+)?(?:d[ao]\s+)?(.+)$/i);
     if(delMatch){
-      const target = delMatch[2].trim();
+      const target = delMatch[1].trim();
       // check if user referred to a date (hoje, amanhã, dd/mm, yyyy-mm-dd)
       try{
         const dateTarget = parsePortugueseDate(target);
@@ -1658,8 +1678,8 @@ async function sendMsg(){
           }
 
           const removedNames = removed.map(m=>m.name || '—');
-          // ensure the user's command isn't left in chat
           removeUserMessage(text);
+          removed.forEach(r => deleteTaskAttachment(r));
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
           addMsg('ai', `Removidas ${removedNames.length} tarefas relacionadas a ${dateTarget}:\n- ${removedNames.join('\n- ')}`);
           try{ for(const r of removed){ await saveEventAndLearning('task.delete', { task: r }); } }catch(e){}
@@ -1673,42 +1693,35 @@ async function sendMsg(){
       const norm = normalizeName(target);
       const candidates = tasks.map((t,i)=>({t,i})).filter(x=> normalizeName(x.t.name||'').includes(norm));
       if(candidates.length===0){
-          // debug
-          console.debug('delete-intercept: no candidates for', target, 'tasksLoaded=', tasks.length);
-          // if nothing matched, offer available task names to help the user
-          const available = tasks.filter(t=>t&&t.name).slice(0,8).map(t=>`• ${t.name} (${t.date.split('-').reverse().slice(0,2).join('/')})`).join('\n');
-          addMsg('ai', `Não encontrei tarefa com "${target}".\n\nSuas tarefas:\n${available||'(nenhuma)'}\n\nEscreva: remover [nome] ou remover [dd/mm]`);
-        // clear input and re-enable buttons
-        inpElem.value=''; inpElem.style.height='42px';
-        const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-        if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-        return;
-      }
-      if(candidates.length===1){
-          const idx = candidates[0].i; const name = candidates[0].t.name;
+          // No matching task found — fall through to AI so natural phrases like
+          // "tirar o lixo amanhã" are treated as task additions, not failed deletions.
+          console.debug('delete-intercept: no candidates for', target, '— falling through to AI');
+          // do NOT return; let the rest of sendMsg handle it as a normal AI message
+      } else {
+        if(candidates.length===1){
+          const idx = candidates[0].i; const taskRemoved = candidates[0].t; const name = taskRemoved.name;
           console.debug('delete-intercept: removing single candidate', name, 'index=', idx);
-          // remove user message from chat so the command doesn't stay visible
           removeUserMessage(text);
           tasks.splice(idx,1);
+          deleteTaskAttachment(taskRemoved);
           saveTasks(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
           addMsg('ai', `Tarefa removida: ${name}`);
-          // persist event
-          try{ saveEventAndLearning('task.delete', { index: idx, task: candidates[0].t }); }catch(e){}
-        inpElem.value=''; inpElem.style.height='42px';
-        const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-        if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-        return;
-      }
-        // multiple candidates -> ask for clarification listing names (avoid numeric selection)
+          try{ saveEventAndLearning('task.delete', { index: idx, task: taskRemoved }); }catch(e){}
+          inpElem.value=''; inpElem.style.height='42px';
+          const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
+          if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
+          return;
+        }
+        // multiple candidates -> ask for clarification
         console.debug('delete-intercept: multiple candidates for', target, candidates.map(c=>c.t.name));
-        // remove user message from chat as we are replying with clarification
         removeUserMessage(text);
         const list = candidates.map(c=>`- ${c.t.name} (${c.t.date}${c.t.time? ' '+c.t.time:''})`).join('\n');
         addMsg('ai', `Encontrei várias tarefas parecidas com "${target}". Por favor, diga o nome completo ou detalhe a tarefa que quer remover:\n${list}`);
-      inpElem.value=''; inpElem.style.height='42px';
-      const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
-      if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
-      return;
+        inpElem.value=''; inpElem.style.height='42px';
+        const sb2 = document.getElementById('send-btn'); const sbb2 = document.getElementById('send-btn-bottom');
+        if(sb2) sb2.disabled = false; if(sbb2) sbb2.disabled = false;
+        return;
+      }
     }
   }catch(e){ console.warn('delete-intercept', e); }
   inpElem.value=''; inpElem.style.height='42px';
