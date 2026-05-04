@@ -279,7 +279,7 @@ jobs:
 </file>
 
 <file path="app.js">
-import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import { collection, addDoc, getDocs, getDoc, getDocFromServer, setDoc, doc, deleteDoc, writeBatch, query, orderBy, limit } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import { getStorage, ref as storageRef, uploadBytesResumable, getDownloadURL, deleteObject } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-storage.js";
 import { signOut } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
@@ -312,6 +312,7 @@ const MONTHS = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','A
 const DAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'];
 
 let tasks = [];
+let _saveToFirebaseTimer = null;
 // tasks are NOT loaded from localStorage at startup — they are loaded after auth in handleAuthStateChange
 
 let recipes = [];
@@ -329,6 +330,7 @@ let timerInterval = null;
 
 // staged attachments waiting for user Send (not yet persisted to localStorage/Firestore)
 let pendingAttachments = [];
+let welcomeGateHandled = false;
 
 // simple in-memory message history used by IA integrations (not window.history)
 let history = [];
@@ -462,9 +464,9 @@ function renderAccountInfo(profile){
   const displayName = p.name || 'Não definido';
   const genderLabel = p.gender === 'fem' ? 'Feminino' : 'Masculino';
   el.innerHTML = `
-    <div><strong>Email:</strong> ${user.email || 'sem email'}</div>
-    <div><strong>Nome:</strong> ${displayName}</div>
-    <div><strong>Saudação:</strong> ${genderLabel}</div>
+    <div><strong>Email:</strong> ${escapeHtml(user.email || 'sem email')}</div>
+    <div><strong>Nome:</strong> ${escapeHtml(displayName)}</div>
+    <div><strong>Saudação:</strong> ${escapeHtml(genderLabel)}</div>
   `;
 }
 
@@ -529,11 +531,21 @@ async function refreshWelcomeGate(user){
       updateSplashGreeting(null);
       return;
     }
+    // Lê localStorage imediatamente para mostrar o nome sem delay
+    try{
+      const lsKey = getProfileStorageKey(user.uid);
+      const raw = localStorage.getItem(lsKey);
+      if(raw){
+        const cached = normalizeProfile(JSON.parse(raw));
+        if(cached.name) updateSplashGreeting(cached);
+      }
+    }catch(e){}
+
     showSplashUI();
     const profile = await loadUserProfile(user.uid);
     currentUserProfile = profile;
     if(profile){
-      updateSplashGreeting(profile);
+      updateSplashGreeting(profile); // atualiza com dados frescos do Firestore
       renderAccountInfo(profile);
       hideProfileModal();
       const preview = document.getElementById('profile-preview');
@@ -607,9 +619,47 @@ async function saveAttachmentRecord(name, url, size, mime, ocr){
   try{
     if(!window.db) return;
     const col = getUserCollection('attachments');
-    if (!col) return;
-    await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr || null, ts: new Date().toISOString() });
+    if(!col) return;
+    const snap = await getDocs(col);
+    const exists = snap.docs.find(d => d.data().url === url);
+    if(exists) return;
+    await addDoc(col, { name, url, size: Number(size||0), mime: mime||null, ocr: ocr||null, ts: new Date().toISOString() });
   }catch(e){ console.warn('saveAttachmentRecord', e); }
+}
+
+async function loadAttachmentsForUser(){
+  try{
+    if(!window.db || !window.auth || !window.auth.currentUser) return;
+    const col = getUserCollection('attachments');
+    if(!col) return;
+    const snap = await getDocs(col);
+    const removed = new Set(loadRemovedAttachmentUrls());
+    const cur = loadLocalAttachments();
+    let changed = false;
+    snap.docs.forEach(d => {
+      const a = d.data();
+      if(!a.url || removed.has(a.url)) return;
+      if(!cur.find(x => x.url === a.url)){
+        cur.push({ id: d.id, name: a.name||'anexo', url: a.url, size: Number(a.size||0), mime: a.mime||null, ts: a.ts||new Date().toISOString() });
+        changed = true;
+      }
+    });
+    if(changed){ saveLocalAttachments(cur); }
+    renderAttachmentsPanel();
+  }catch(e){ console.warn('loadAttachmentsForUser', e); }
+}
+
+async function deleteAttachmentFromFirestore(url){
+  try{
+    if(!window.db || !window.auth || !window.auth.currentUser) return;
+    const col = getUserCollection('attachments');
+    if(!col) return;
+    const snap = await getDocs(col);
+    const toDelete = snap.docs.filter(d => d.data().url === url);
+    for(const d of toDelete){
+      await deleteDoc(doc(window.db, col.path, d.id));
+    }
+  }catch(e){ console.warn('deleteAttachmentFromFirestore', e); }
 }
 
 // local attachments storage (persist metadata in localStorage for quick access) - USER SCOPED
@@ -658,7 +708,17 @@ function removeLocalAttachment(id){
   try{
     const list = loadLocalAttachments();
     const item = list.find(a=>a.id===id);
-    if(item && item.url) markAttachmentRemoved(item.url);
+    if(item && item.url){
+      markAttachmentRemoved(item.url);
+      deleteAttachmentFromFirestore(item.url).catch(e=>console.warn('deleteAttachmentFromFirestore', e));
+      try{
+        const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
+        if(st){
+          const sref = storageRef(st, item.url);
+          deleteObject(sref).catch(e=>console.warn('deleteObject storage', e));
+        }
+      }catch(e){ console.warn('removeLocalAttachment storage', e); }
+    }
     saveLocalAttachments(list.filter(a=>a.id!==id));
     renderAttachmentsPanel();
   }catch(e){ console.warn('removeLocalAttachment', e); }
@@ -666,15 +726,49 @@ function removeLocalAttachment(id){
 
 function createTaskFromAttachment(id){
   try{
-    const list = loadLocalAttachments(); const a = list.find(x=>x.id===id); if(!a) return alert('Anexo não encontrado');
-    const name = prompt('Nome da tarefa para o anexo (deixe em branco para usar o nome do arquivo):', a.name) || a.name;
-    const date = prompt('Data para associar (YYYY-MM-DD ou texto natural):', todayStr());
-    if(!date) return;
-    const parsed = parsePortugueseDate(date) || date;
-    const t = { name: name + ' [ANEXO]', date: parsed, time: null, cat: 'outro', est: 5, attachment: a.url };
-    tasks.push(t); saveTasks(); renderCal(); renderTasks(); removeLocalAttachment(id);
-    alert('Tarefa criada com anexo e adicionada ao calendário.');
-  }catch(e){ console.warn('createTaskFromAttachment', e); alert('Erro ao criar tarefa do anexo'); }
+    const list = loadLocalAttachments();
+    const a = list.find(x=>x.id===id);
+    if(!a) return;
+
+    const modal = document.getElementById('edit-task-modal');
+    if(!modal) return;
+    modal.classList.remove('hidden');
+    modal.dataset.taskIndex = '__new_from_attachment__';
+    document.getElementById('edit-task-name').value = a.name || '';
+    document.getElementById('edit-task-date').value = todayStr();
+    document.getElementById('edit-task-time').value = '';
+    document.getElementById('edit-task-cat').value = 'outro';
+    document.getElementById('edit-task-est').value = '30';
+    document.getElementById('edit-task-message').textContent = '';
+
+    const attDiv = document.getElementById('edit-task-attachments');
+    if(attDiv){
+      attDiv.innerHTML = `<a href="${escapeHtml(a.url)}" target="_blank">Ver anexo: ${escapeHtml(a.name)}</a>`;
+      attDiv.dataset.newAttachment = a.url;
+    }
+
+    document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); };
+
+    const form = document.getElementById('edit-task-form');
+    const prevSubmit = form ? form.onsubmit : null;
+    if(form){
+      form.onsubmit = function(ev){
+        ev.preventDefault();
+        try{
+          const name = document.getElementById('edit-task-name').value.trim() || a.name;
+          const date = document.getElementById('edit-task-date').value || todayStr();
+          const time = document.getElementById('edit-task-time').value || null;
+          const cat  = document.getElementById('edit-task-cat').value || 'outro';
+          const est  = parseInt(document.getElementById('edit-task-est').value||'30',10)||30;
+          const t = { name, date, time: time||null, cat, est, attachment: a.url };
+          tasks.push(t); saveTasks(); renderCal(); renderTasks();
+          removeLocalAttachment(id);
+          modal.classList.add('hidden');
+        }catch(e){ console.warn('createTaskFromAttachment save', e); }
+        form.onsubmit = prevSubmit;
+      };
+    }
+  }catch(e){ console.warn('createTaskFromAttachment', e); }
 }
 
 function renderAttachmentsPanel(){
@@ -686,7 +780,7 @@ function renderAttachmentsPanel(){
     const list = allAttachments.filter(a => !taskAttachmentUrls.has(a.url));
     // show/hide entire section
     const section = document.getElementById('anexos-section');
-    if(section) section.style.display = list.length ? '' : 'none';
+    if(section) section.style.display = '';
     if(!list.length){ container.innerHTML = '<div class="no-tasks">Nenhum anexo ainda</div>'; return; }
     container.innerHTML = '';
     list.forEach(a=>{
@@ -694,7 +788,7 @@ function renderAttachmentsPanel(){
       item.style.display='flex'; item.style.alignItems='center'; item.style.justifyContent='space-between'; item.style.gap='8px'; item.style.padding='8px'; item.style.background='rgba(255,255,255,0.02)'; item.style.borderRadius='8px';
       const left = document.createElement('div'); left.style.display='flex'; left.style.gap='8px'; left.style.alignItems='center';
       const ico = document.createElement('div'); ico.style.width='40px'; ico.style.height='40px'; ico.style.borderRadius='6px'; ico.style.background='#0f1113'; ico.style.display='flex'; ico.style.alignItems='center'; ico.style.justifyContent='center'; ico.style.color='#fff'; ico.textContent = (a.name.split('.').pop()||'F').toUpperCase();
-      const meta = document.createElement('div'); meta.style.display='flex'; meta.style.flexDirection='column'; meta.innerHTML = `<div style="font-size:13px">${a.name}</div><div style="font-size:11px;color:var(--muted)">${Math.round(a.size/1024)} KB • ${new Date(a.ts).toLocaleString()}</div>`;
+      const meta = document.createElement('div'); meta.style.display='flex'; meta.style.flexDirection='column'; meta.innerHTML = `<div style="font-size:13px">${escapeHtml(a.name)}</div><div style="font-size:11px;color:var(--muted)">${Math.round(a.size/1024)} KB • ${new Date(a.ts).toLocaleString()}</div>`;
       left.appendChild(ico); left.appendChild(meta);
       const actions = document.createElement('div'); actions.style.display='flex'; actions.style.gap='6px';
       const open = document.createElement('a'); open.href = a.url; open.target='_blank'; open.textContent='Abrir'; open.className='cal-nav small';
@@ -821,7 +915,7 @@ function renderCal(){
         const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
         const mt = document.createElement('div'); mt.className='mini-task';
         const completedClass = t.completedAt ? ' completed' : '';
-        mt.innerHTML = `<div class="mini-dot" style="background:${c}"></div><div class="mini-text${completedClass}">${t.time? t.time+' ' : ''}${t.name}</div>`;
+        mt.innerHTML = `<div class="mini-dot" style="background:${c}"></div><div class="mini-text${completedClass}">${t.time? escapeHtml(t.time)+' ' : ''}${escapeHtml(t.name)}</div>`;
         el.appendChild(mt);
       });
       if(tasksForDay.length>maxShow){
@@ -839,13 +933,21 @@ function renderCal(){
 // ── tarefas ───────────────────────────────────────────────────────
 const CAT_COLORS = { trabalho:'#4f8ef7', estudo:'#3ecf8e', pessoal:'#a78bfa', projeto:'#f5a623', outro:'#7a7f8e' };
 
+function saveToFirebaseDebounced(tasksList){
+  if(_saveToFirebaseTimer) clearTimeout(_saveToFirebaseTimer);
+  _saveToFirebaseTimer = setTimeout(()=>{
+    _saveToFirebaseTimer = null;
+    saveToFirebase(tasksList).catch(e=>console.error('saveTasks->saveToFirebase (debounced)', e));
+  }, 1500);
+}
+
 function saveTasks(){
   try{
     const key = getUserLocalStorageKey('agenda_tasks');
     localStorage.setItem(key, JSON.stringify(tasks));
   }catch(e){ console.warn('saveTasks localStorage write failed', e); }
   if(window.db){
-    saveToFirebase(tasks).catch(e=>console.error('saveTasks->saveToFirebase', e));
+    saveToFirebaseDebounced(tasks);
   }
   // recompute aggregates and update UI whenever tasks change
   computeAggregates();
@@ -931,6 +1033,7 @@ async function loadTasksForUser(uid){
 
 // Called from auth state changes to load appropriate tasks
 window.handleAuthStateChange = async function(user){
+  welcomeGateHandled = true;
   try{
     try{ console.debug('DEBUG: handleAuthStateChange invoked, user=', user && user.uid); }catch(e){}
     if(user){
@@ -952,11 +1055,13 @@ window.handleAuthStateChange = async function(user){
       await loadTasksForUser(user.uid);
       try{ console.debug('DEBUG: after loadTasksForUser, tasks.length=', tasks && tasks.length); }catch(e){}
       await loadRecipesForUser(user.uid);
+      // Load attachments from Firestore and render panel
+      try{ await loadAttachmentsForUser(); }catch(e){ console.warn('loadAttachmentsForUser', e); }
       try{
         const userMessages = await loadMessagesFromFirebase();
         if(userMessages && userMessages.length > 0){
           for(const msg of userMessages){
-            addMsg(msg.role || 'ai', msg.text || '');
+            addMsg(msg.role || 'ai', msg.text || '', true);
           }
         }
       }catch(e){ console.warn('load messages failed', e); }
@@ -965,6 +1070,7 @@ window.handleAuthStateChange = async function(user){
       // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
       tasks = [];
       recipes = [];
+      history = [];
       currentUserProfile = null;
       hideProfileModal();
       // Clear chat DOM
@@ -988,6 +1094,16 @@ window.handleAuthStateChange = async function(user){
 }
 
 // ── normalize and aggregates ───────────────────────────────────
+function escapeHtml(str){
+  if(!str && str !== 0) return '';
+  return String(str)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;');
+}
+
 function normalizeName(name){
   if(!name) return '';
   return name.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()\[\]"]+/g,'').replace(/\s+/g,' ').trim();
@@ -1047,10 +1163,12 @@ function parsePortugueseDate(text){
   // dd/mm or dd-mm (assume current year if missing)
   const m = s.match(/(\d{1,2})[\/\-](\d{1,2})(?:[\/\-](\d{2,4}))?/);
   if(m){
-    let day = String(m[1]).padStart(2,'0'); let month = String(m[2]).padStart(2,'0');
+    let day = parseInt(m[1], 10);
+    let month = parseInt(m[2], 10);
+    if(day < 1 || day > 31 || month < 1 || month > 12) return null;
     let year = m[3] ? String(m[3]) : String(new Date().getFullYear());
     if(year.length===2) year = '20'+year;
-    return `${year}-${month}-${day}`;
+    return `${year}-${String(month).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
   }
   // handle "dia 23", "23 de abril", "23 abril" or just a day number (assume current month/year)
   // month name parsing
@@ -1171,7 +1289,7 @@ function taskAttachmentHtml(task){
   const links = urls.map(url=>{
     const local = loadLocalAttachments().find(a=> a.url === url);
     const label = local && local.name ? local.name : (url.split('/').pop() || 'anexo');
-    return `<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    return `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`;
   }).join('<br>');
   return `<div class="meta" style="margin-top:8px"><strong>Anexo:</strong><div>${links}</div></div>`;
 }
@@ -1218,11 +1336,11 @@ function renderAggregatesUI(agg){
   html += '<div style="display:flex;flex-direction:column;gap:6px">';
   html += '<div class="agg-small">Por categoria:</div>';
   for(const k of Object.keys(agg.byCategory)){
-    const v = agg.byCategory[k]; html += `<div class="agg-item"><strong>${k}</strong> — média ${v.avg}min (n=${v.n})</div>`;
+    const v = agg.byCategory[k]; html += `<div class="agg-item"><strong>${escapeHtml(k)}</strong> — média ${escapeHtml(String(v.avg))}min (n=${escapeHtml(String(v.n))})</div>`;
   }
   html += '<div class="agg-small" style="margin-top:8px">Tarefas semelhantes:</div>';
   const names = Object.keys(agg.byName).slice(0,6);
-  for(const n of names){ const v = agg.byName[n]; html += `<div class="agg-item">${v.sample} — média ${v.avg}min (n=${v.n})</div>`; }
+  for(const n of names){ const v = agg.byName[n]; html += `<div class="agg-item">${escapeHtml(v.sample)} — média ${escapeHtml(String(v.avg))}min (n=${escapeHtml(String(v.n))})</div>`; }
   html += '</div>';
   container.innerHTML = html;
 }
@@ -1274,7 +1392,7 @@ function editTask(i){
   attDiv.innerHTML = '';
   if(t.attachment){
     const a = document.createElement('div');
-    a.innerHTML = `<a href="${t.attachment}" target="_blank">Ver anexo</a>`;
+    a.innerHTML = `<a href="${escapeHtml(t.attachment)}" target="_blank">Ver anexo</a>`;
     attDiv.appendChild(a);
   }
   document.getElementById('edit-task-message').textContent = '';
@@ -1285,7 +1403,7 @@ function editTask(i){
     const file = ev.target.files[0];
     if(file){
       const url = URL.createObjectURL(file);
-      attDiv.innerHTML = `<a href="${url}" target="_blank">${file.name}</a>`;
+      attDiv.innerHTML = `<a href="${escapeHtml(url)}" target="_blank">${escapeHtml(file.name)}</a>`;
       attDiv.dataset.newAttachment = url;
       attDiv.dataset.newAttachmentName = file.name;
     }
@@ -1314,6 +1432,11 @@ function deleteTaskAttachment(task){
     if(filtered.length !== cur.length){ saveLocalAttachments(filtered); renderAttachmentsPanel(); }
   }catch(e){}
   if(!urls.length) return;
+  try{
+    urls.forEach(u => {
+      deleteAttachmentFromFirestore(u).catch(e=>console.warn('deleteAttachmentFromFirestore in deleteTaskAttachment', e));
+    });
+  }catch(e){}
   try{
     const st = window.storage || (typeof getStorage === 'function' && window.firebaseApp ? getStorage(window.firebaseApp) : null);
     if(!st) return;
@@ -1358,16 +1481,16 @@ function showTasksForDate(dateStr){
     const elapsed = isRunning && activeTimer.start ? formatElapsed(activeTimer.start) : (t.actualDuration? (t.actualDuration+' min') : '');
     return `<div class="task-card">
       <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;gap:8px;align-items:center"><div class="task-dot" style="background:${c}"></div><div>${t.name}</div></div>
+        <div style="display:flex;gap:8px;align-items:center"><div class="task-dot" style="background:${c}"></div><div>${escapeHtml(t.name)}</div></div>
         <div style="display:flex;gap:8px;align-items:center">
-          ${elapsed? `<div class="elapsed">${elapsed}</div>` : ''}
+          ${elapsed? `<div class="elapsed">${escapeHtml(elapsed)}</div>` : ''}
           <button class="cal-nav" onclick="toggleTimer(${i})">${isRunning? 'Parar' : 'Iniciar'}</button>
           <button class="cal-nav" onclick="markTaskDone(${i})">concluir</button>
           <button class="cal-nav" onclick="editTask(${i})">editar</button>
           <button class="cal-nav" onclick="deleteTask(${i})">remover</button>
         </div>
       </div>
-      <div class="task-meta">${t.time||''} · ${t.est||''}min</div>
+      <div class="task-meta">${escapeHtml(t.time||'')} · ${escapeHtml(String(t.est||''))}min</div>
     </div>`;
   }).join('');
 }
@@ -1382,7 +1505,7 @@ function showDatePopover(dateStr){
   html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${dateStr}</div>`;
   if(!items.length){ html += '<div class="no-tasks">Nenhuma tarefa nesta data</div>'; }
     for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${t.name}</strong><div class="meta">${t.time? t.time+' · ' : ''}${t.cat} · ${t.est||''}min</div>${taskAttachmentHtml(t)}${taskFlagsHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
+    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${escapeHtml(t.name)}</strong><div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min</div>${taskAttachmentHtml(t)}${taskFlagsHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
   }
   body.innerHTML = html;
   // show
@@ -1690,7 +1813,7 @@ function renderTasks(){
   }
 
 // ── chat helpers ─────────────────────────────────────────────────
-function addMsg(role, text){
+function addMsg(role, text, fromHistory){
   const msgs = document.getElementById('msgs');
   if(!msgs){
     console.warn('addMsg: msgs element not found');
@@ -1698,6 +1821,7 @@ function addMsg(role, text){
   }
   const wrap = document.createElement('div');
   wrap.className = 'msg '+role;
+  if(fromHistory) wrap.dataset.fromHistory = '1';
   const t = new Date().toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'});
   const safeText = (text === null || text === undefined) ? '' : String(text);
   wrap.innerHTML = `<div class="bubble">${safeText.replace(/\n/g,'<br/>')}</div><span class="msg-time">${t}</span>`;
@@ -2282,12 +2406,18 @@ ${tasksSummary}`;
       },
       body: JSON.stringify({
         model:    window.GROQ_MODEL,
-        messages: [{role:'system',content:system}, ...history],
+        messages: [{role:'system',content:system}, ...history.slice(-20)],
         temperature: 0.4,
         max_tokens:  900
       })
     });
 
+    if(!resp.ok){
+      let errMsg = `Erro HTTP ${resp.status}`;
+      if(resp.status === 429) errMsg = 'Limite de requisições atingido. Aguarde alguns segundos e tente novamente.';
+      else if(resp.status === 503) errMsg = 'Serviço da IA temporariamente indisponível. Tente novamente em breve.';
+      throw new Error(errMsg);
+    }
     const data = await resp.json();
     if(data.error){ throw new Error(data.error.message); }
 
@@ -2451,7 +2581,8 @@ setTimeout(()=>{
           }
 
           const safeName = name.replace(/[^a-zA-Z0-9._-]/g,'_');
-          const path = 'attachments/' + Date.now() + '_' + safeName;
+          const uid = window.auth && window.auth.currentUser ? window.auth.currentUser.uid : 'unknown';
+          const path = 'attachments/' + uid + '/' + Date.now() + '_' + safeName;
           const sref = storageRef(storage, path);
 
           // create a preview element in bottom-replies so user sees the selected file
@@ -2758,26 +2889,26 @@ function openRecipeModal(recipeId){
   if(nameEl) nameEl.textContent = r.name || '—';
   if(bodyEl){
     let html = '';
-    if(r.prepTime) html += `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">⏱ ${r.prepTime} min de preparo</div>`;
+    if(r.prepTime) html += `<div style="font-size:13px;color:var(--muted);margin-bottom:4px">⏱ ${escapeHtml(r.prepTime)} min de preparo</div>`;
     if(r.ingredients && r.ingredients.length){
       html += '<div class="recipe-section-title">Ingredientes</div>';
-      html += '<ul class="recipe-modal-list">' + r.ingredients.map(i=>`<li>${i}</li>`).join('') + '</ul>';
+      html += '<ul class="recipe-modal-list">' + r.ingredients.map(i=>`<li>${escapeHtml(i)}</li>`).join('') + '</ul>';
     }
     if(r.steps && r.steps.length){
       html += '<div class="recipe-section-title">Modo de Preparo</div>';
-      html += '<ol class="recipe-modal-list">' + r.steps.map(s=>`<li>${s}</li>`).join('') + '</ol>';
+      html += '<ol class="recipe-modal-list">' + r.steps.map(s=>`<li>${escapeHtml(s)}</li>`).join('') + '</ol>';
     }
     if(r.notes){
       html += '<div class="recipe-section-title">Observações</div>';
-      html += `<div style="font-size:13px;color:var(--text);padding:8px;border-radius:6px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.02)">${r.notes}</div>`;
+      html += `<div style="font-size:13px;color:var(--text);padding:8px;border-radius:6px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.02)">${escapeHtml(r.notes)}</div>`;
     }
     if(r.tags && r.tags.length){
       html += '<div class="recipe-section-title">Tags</div>';
-      html += '<div class="recipe-tags">' + r.tags.map(t=>`<span class="recipe-tag">${t}</span>`).join('') + '</div>';
+      html += '<div class="recipe-tags">' + r.tags.map(t=>`<span class="recipe-tag">${escapeHtml(t)}</span>`).join('') + '</div>';
     }
     if(r.history && r.history.length){
       html += '<div class="recipe-section-title">Histórico</div>';
-      html += r.history.map(h=>`<div class="recipe-history-item"><strong>${h.date||''}</strong>${h.obs? ' — '+h.obs : ''}</div>`).join('');
+      html += r.history.map(h=>`<div class="recipe-history-item"><strong>${escapeHtml(h.date||'')}</strong>${h.obs? ' — '+escapeHtml(h.obs) : ''}</div>`).join('');
     }
     bodyEl.innerHTML = html;
   }
@@ -2842,6 +2973,8 @@ async function sendCulinariaMsg(text){
   if(!window.GROQ_API_KEY || window.GROQ_API_KEY==='COLE_SUA_CHAVE_GROQ_AQUI'){
     thinking.remove();
     addMsg('ai','⚠️ Chave Groq não configurada. Configure GROQ_API_KEY.');
+    const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
+    if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
     return;
   }
   try{
@@ -2851,6 +2984,12 @@ async function sendCulinariaMsg(text){
       headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+window.GROQ_API_KEY },
       body: JSON.stringify({ model: window.GROQ_MODEL, messages:[{role:'system',content:system},{role:'user',content:text}], temperature:0.5, max_tokens:900 })
     });
+    if(!resp.ok){
+      let errMsg = `Erro HTTP ${resp.status}`;
+      if(resp.status === 429) errMsg = 'Limite de requisições atingido. Aguarde alguns segundos e tente novamente.';
+      else if(resp.status === 503) errMsg = 'Serviço da IA temporariamente indisponível. Tente novamente em breve.';
+      throw new Error(errMsg);
+    }
     const data = await resp.json();
     if(data.error) throw new Error(data.error.message);
     const full = data.choices[0].message.content;
@@ -2896,6 +3035,8 @@ async function sendCulinariaMsg(text){
   }catch(err){
     thinking.remove();
     addMsg('ai','Erro ao conectar com a IA: '+ String(err.message||err));
+    const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
+    if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
   }
 }
 
@@ -3022,7 +3163,8 @@ async function loadMessagesFromFirebase(){
     if (!window.auth || !window.auth.currentUser) return [];
     const col = getUserCollection('messages');
     if (!col) return [];
-    const snap = await getDocs(col);
+    const q = query(col, orderBy('ts', 'asc'), limit(50));
+    const snap = await getDocs(q);
     const messages = snap.docs.map(d=>Object.assign({ _id: d.id }, d.data()));
     return messages;
   }catch(e){ console.warn('loadMessagesFromFirebase', e); return []; }
@@ -3091,6 +3233,7 @@ renderTasks();
 // if the auth state was already established before app.js loaded, ensure welcome gate runs
 function initWelcomeGateRetry(attempt = 0){
   try{
+    if(welcomeGateHandled) return;
     if(window && window.auth && window.auth.currentUser){
       refreshWelcomeGate(window.auth.currentUser);
       return;
@@ -3985,6 +4128,9 @@ Feito rapidamente para prototipagem. Se quiser, eu implemento os próximos passo
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    match /attachments/{userId}/{allPaths=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
     match /attachments/{allPaths=**} {
       allow read, write: if request.auth != null;
     }
