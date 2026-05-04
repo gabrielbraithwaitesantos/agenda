@@ -107,6 +107,7 @@ function hideProfileModal(){
   const modal = document.getElementById('profile-modal');
   if(modal) modal.classList.add('hidden');
 }
+window.hideProfileModal = hideProfileModal;
 
 function showProfileModal(){
   const modal = document.getElementById('profile-modal');
@@ -2489,12 +2490,12 @@ window.switchAppTab = function(tab){
   if(inpSplash) inpSplash.placeholder = placeholder;
 
   if(isCulinaria){
-    if(agendaView) agendaView.style.display = 'none';
-    if(culinariaView) culinariaView.style.display = 'flex';
+    if(agendaView){ agendaView.style.opacity = '0'; agendaView.style.pointerEvents = 'none'; setTimeout(()=>{ agendaView.style.display = 'none'; }, 150); }
+    if(culinariaView){ culinariaView.style.display = 'flex'; setTimeout(()=>{ culinariaView.style.opacity = '1'; culinariaView.style.pointerEvents = ''; }, 10); }
     renderRecipeList();
   } else {
-    if(agendaView) agendaView.style.display = '';
-    if(culinariaView) culinariaView.style.display = 'none';
+    if(culinariaView){ culinariaView.style.opacity = '0'; culinariaView.style.pointerEvents = 'none'; setTimeout(()=>{ culinariaView.style.display = 'none'; }, 150); }
+    if(agendaView){ agendaView.style.display = ''; setTimeout(()=>{ agendaView.style.opacity = '1'; agendaView.style.pointerEvents = ''; }, 10); }
   }
 };
 

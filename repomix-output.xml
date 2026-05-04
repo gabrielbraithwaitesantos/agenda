@@ -2770,12 +2770,12 @@ window.switchAppTab = function(tab){
   if(inpSplash) inpSplash.placeholder = placeholder;
 
   if(isCulinaria){
-    if(agendaView) agendaView.style.display = 'none';
-    if(culinariaView) culinariaView.style.display = 'flex';
+    if(agendaView){ agendaView.style.opacity = '0'; agendaView.style.pointerEvents = 'none'; setTimeout(()=>{ agendaView.style.display = 'none'; }, 150); }
+    if(culinariaView){ culinariaView.style.display = 'flex'; setTimeout(()=>{ culinariaView.style.opacity = '1'; culinariaView.style.pointerEvents = ''; }, 10); }
     renderRecipeList();
   } else {
-    if(agendaView) agendaView.style.display = '';
-    if(culinariaView) culinariaView.style.display = 'none';
+    if(culinariaView){ culinariaView.style.opacity = '0'; culinariaView.style.pointerEvents = 'none'; setTimeout(()=>{ culinariaView.style.display = 'none'; }, 150); }
+    if(agendaView){ agendaView.style.display = ''; setTimeout(()=>{ agendaView.style.opacity = '1'; agendaView.style.pointerEvents = ''; }, 10); }
   }
 };
 
@@ -4164,6 +4164,10 @@ service firebase.storage {
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+html {
+  overflow-y: hidden;
+}
+
 body {
     background: linear-gradient(180deg,var(--bg), #0a0a0b 60%);
     color: var(--text);
@@ -4176,6 +4180,8 @@ body {
   justify-content: flex-start;
   padding: 30px 12px 100px; /* extra bottom spacing for floating bar */
     box-sizing: border-box;
+  overflow-y: auto;
+  width: 100vw;
 }
   /* ── setup banner ── */
   #setup-banner {
@@ -4376,6 +4382,18 @@ body {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  opacity: 1;
+}
+
+#agenda-view,
+#culinaria-view {
+  min-height: 0;
+  flex: 1;
+  transition: opacity 0.15s ease;
+}
+
+#culinaria-view {
+  opacity: 0;
 }
 
 /* ── task cards ── */
@@ -4412,7 +4430,11 @@ body {
 .running-badge { background: linear-gradient(135deg,var(--accent),var(--accent2)); color: white; padding:4px 8px; border-radius:8px; font-size:12px; }
 .elapsed { font-family: var(--mono); font-size:12px; color:var(--muted); }
 
-/* ── scrollbar ── */
+/* ── scrollbar — hidden but functional ── */
+body::-webkit-scrollbar { display: none; }
+body { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* scrollbar para elementos internos (chat, listas) */
 ::-webkit-scrollbar { width: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
