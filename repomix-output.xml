@@ -388,6 +388,7 @@ function hideProfileModal(){
   const modal = document.getElementById('profile-modal');
   if(modal) modal.classList.add('hidden');
 }
+window.hideProfileModal = hideProfileModal;
 
 function showProfileModal(){
   const modal = document.getElementById('profile-modal');
@@ -1480,17 +1481,20 @@ function showTasksForDate(dateStr){
     const isRunning = activeTimer && activeTimer.index===i;
     const elapsed = isRunning && activeTimer.start ? formatElapsed(activeTimer.start) : (t.actualDuration? (t.actualDuration+' min') : '');
     return `<div class="task-card">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;gap:8px;align-items:center"><div class="task-dot" style="background:${c}"></div><div>${escapeHtml(t.name)}</div></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          ${elapsed? `<div class="elapsed">${escapeHtml(elapsed)}</div>` : ''}
-          <button class="cal-nav" onclick="toggleTimer(${i})">${isRunning? 'Parar' : 'Iniciar'}</button>
-          <button class="cal-nav" onclick="markTaskDone(${i})">concluir</button>
-          <button class="cal-nav" onclick="editTask(${i})">editar</button>
-          <button class="cal-nav" onclick="deleteTask(${i})">remover</button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div class="task-dot" style="background:${c};flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.name)}</div>
+          <div class="task-meta" style="margin-top:2px">${escapeHtml(t.time||'')}${t.time?' · ':''}${escapeHtml(String(t.est||''))}min · ${escapeHtml(t.cat||'')}</div>
         </div>
       </div>
-      <div class="task-meta">${escapeHtml(t.time||'')} · ${escapeHtml(String(t.est||''))}min</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+        ${elapsed? `<div class="elapsed">${escapeHtml(elapsed)}</div>` : ''}
+        <button class="cal-nav small" onclick="toggleTimer(${i})">${isRunning? 'Parar' : 'Iniciar'}</button>
+        <button class="cal-nav small" onclick="markTaskDone(${i})">concluir</button>
+        <button class="cal-nav small" onclick="editTask(${i})">editar</button>
+        <button class="cal-nav small" onclick="deleteTask(${i})">remover</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -2392,6 +2396,14 @@ BLOCO 1: resposta amigável em português. Inclua:
 
 BLOCO 2 (após ---JSON---): array JSON das novas tarefas extraídas:
 [{"name":"nome curto","cat":"trabalho|estudo|pessoal|projeto|outro","date":"YYYY-MM-DD","time":"HH:MM ou null","est":60}]
+
+Regras de categoria (use EXATAMENTE uma dessas):
+- "trabalho": qualquer tarefa profissional, reunião, empresa, WhatsApp comercial, cliente, relatório, deadline de trabalho
+- "estudo": provas, estudar matéria, revisão, faculdade, curso, leituras acadêmicas
+- "pessoal": consultas médicas, academia, compras pessoais, família, lazer, hobbies
+- "projeto": desenvolvimento de software, projetos pessoais, criação de conteúdo, freelance
+- "outro": qualquer coisa que não se encaixe nas categorias acima
+
 Se não houver novas tarefas, retorne [].
 
 ${tasksSummary}`;
@@ -3758,6 +3770,7 @@ service cloud.firestore {
 
 <div id="profile-modal" class="hidden">
   <div class="modal-card profile-card">
+    <button onclick="hideProfileModal()" style="position:absolute;top:12px;right:14px;background:none;border:none;color:var(--muted);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px;" title="Fechar">&times;</button>
     <h3>Como eu devo te chamar?</h3>
     <div style="color:var(--muted);font-size:13px;margin-bottom:12px">Preencha seu nome para eu te cumprimentar no splash.</div>
     <div id="profile-account-info" class="profile-account-info"></div>
@@ -4165,6 +4178,7 @@ service firebase.storage {
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html {
+  height: 100%;
   overflow-y: hidden;
 }
 
@@ -4182,6 +4196,7 @@ body {
     box-sizing: border-box;
   overflow-y: auto;
   width: 100vw;
+  height: 100%;
 }
   /* ── setup banner ── */
   #setup-banner {
@@ -4539,11 +4554,44 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
     padding: 4px 0;
   }
 
-  /* task cards: wrap action buttons */
+  /* task cards mobile */
+  .task-card {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px 10px;
+  }
+
   .task-card > div:first-child {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+
+  .task-card > div:last-child {
+    width: 100%;
+    display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
+
+  .task-card strong {
+    font-size: 13px;
+    line-height: 1.3;
+  }
+
+  .task-card .meta {
+    font-size: 11px;
+  }
+
+  /* section titles mobile */
+  .section-title {
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    margin-bottom: 6px;
+  }
+
   .task-card .cal-nav,
   .task-card .cal-nav.small {
     font-size: 11px;
@@ -4956,7 +5004,7 @@ input::-webkit-inner-spin-button {
 /* profile gate */
 #profile-modal { position: fixed; inset: 0; display:flex; align-items:center; justify-content:center; background: rgba(2,8,23,0.86); z-index:1350; }
 #profile-modal.hidden { display:none; }
-.profile-card { width: min(460px, 94%); background: linear-gradient(180deg, rgba(12,14,18,0.98), rgba(8,10,14,0.96)); border:1px solid rgba(255,255,255,0.14); padding: 16px; border-radius:12px; box-shadow: 0 30px 90px rgba(0,0,0,0.88); backdrop-filter: blur(12px); }
+.profile-card { position: relative; width: min(460px, 94%); background: linear-gradient(180deg, rgba(12,14,18,0.98), rgba(8,10,14,0.96)); border:1px solid rgba(255,255,255,0.14); padding: 16px; border-radius:12px; box-shadow: 0 30px 90px rgba(0,0,0,0.88); backdrop-filter: blur(12px); }
 .profile-field { display:flex; flex-direction:column; gap:6px; margin-top:12px; }
 .profile-field label { font-size:13px; color:var(--muted); }
 .profile-field input,

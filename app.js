@@ -1200,17 +1200,20 @@ function showTasksForDate(dateStr){
     const isRunning = activeTimer && activeTimer.index===i;
     const elapsed = isRunning && activeTimer.start ? formatElapsed(activeTimer.start) : (t.actualDuration? (t.actualDuration+' min') : '');
     return `<div class="task-card">
-      <div style="display:flex;align-items:center;justify-content:space-between">
-        <div style="display:flex;gap:8px;align-items:center"><div class="task-dot" style="background:${c}"></div><div>${escapeHtml(t.name)}</div></div>
-        <div style="display:flex;gap:8px;align-items:center">
-          ${elapsed? `<div class="elapsed">${escapeHtml(elapsed)}</div>` : ''}
-          <button class="cal-nav" onclick="toggleTimer(${i})">${isRunning? 'Parar' : 'Iniciar'}</button>
-          <button class="cal-nav" onclick="markTaskDone(${i})">concluir</button>
-          <button class="cal-nav" onclick="editTask(${i})">editar</button>
-          <button class="cal-nav" onclick="deleteTask(${i})">remover</button>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div class="task-dot" style="background:${c};flex-shrink:0"></div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.name)}</div>
+          <div class="task-meta" style="margin-top:2px">${escapeHtml(t.time||'')}${t.time?' · ':''}${escapeHtml(String(t.est||''))}min · ${escapeHtml(t.cat||'')}</div>
         </div>
       </div>
-      <div class="task-meta">${escapeHtml(t.time||'')} · ${escapeHtml(String(t.est||''))}min</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+        ${elapsed? `<div class="elapsed">${escapeHtml(elapsed)}</div>` : ''}
+        <button class="cal-nav small" onclick="toggleTimer(${i})">${isRunning? 'Parar' : 'Iniciar'}</button>
+        <button class="cal-nav small" onclick="markTaskDone(${i})">concluir</button>
+        <button class="cal-nav small" onclick="editTask(${i})">editar</button>
+        <button class="cal-nav small" onclick="deleteTask(${i})">remover</button>
+      </div>
     </div>`;
   }).join('');
 }
@@ -1225,7 +1228,20 @@ function showDatePopover(dateStr){
   html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${dateStr}</div>`;
   if(!items.length){ html += '<div class="no-tasks">Nenhuma tarefa nesta data</div>'; }
     for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${escapeHtml(t.name)}</strong><div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min</div>${taskAttachmentHtml(t)}${taskFlagsHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
+    html += `<div class="popover-item">
+  <div class="popover-item-top">
+    <div class="task-dot" style="background:${c};flex-shrink:0"></div>
+    <div style="flex:1;min-width:0">
+      <strong style="font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.name)}</strong>
+      <div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min</div>
+      ${taskAttachmentHtml(t)}${taskFlagsHtml(t)}
+    </div>
+  </div>
+  <div class="popover-item-actions">
+    <button class="cal-nav small" onclick="editTask(${i}); closeDatePopover();">Editar</button>
+    <button class="cal-nav small" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button>
+  </div>
+</div>`;
   }
   body.innerHTML = html;
   // show
@@ -2112,6 +2128,14 @@ BLOCO 1: resposta amigável em português. Inclua:
 
 BLOCO 2 (após ---JSON---): array JSON das novas tarefas extraídas:
 [{"name":"nome curto","cat":"trabalho|estudo|pessoal|projeto|outro","date":"YYYY-MM-DD","time":"HH:MM ou null","est":60}]
+
+Regras de categoria (use EXATAMENTE uma dessas):
+- "trabalho": qualquer tarefa profissional, reunião, empresa, WhatsApp comercial, cliente, relatório, deadline de trabalho
+- "estudo": provas, estudar matéria, revisão, faculdade, curso, leituras acadêmicas
+- "pessoal": consultas médicas, academia, compras pessoais, família, lazer, hobbies
+- "projeto": desenvolvimento de software, projetos pessoais, criação de conteúdo, freelance
+- "outro": qualquer coisa que não se encaixe nas categorias acima
+
 Se não houver novas tarefas, retorne [].
 
 ${tasksSummary}`;
