@@ -1,10 +1,8 @@
 const { onRequest } = require('firebase-functions/v2/https');
-const { defineSecret } = require('firebase-functions/params');
 
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
-const GROQ_API_KEY = defineSecret('GROQ_API_KEY');
 
-exports.groqProxy = onRequest({ cors: true, secrets: [GROQ_API_KEY] }, async (req, res) => {
+exports.groqProxy = onRequest({ cors: true }, async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.status(204).send('');
     return;
@@ -15,11 +13,13 @@ exports.groqProxy = onRequest({ cors: true, secrets: [GROQ_API_KEY] }, async (re
     return;
   }
 
-  const apiKey = GROQ_API_KEY.value();
-  if (!apiKey) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || apiKey === '') {
+    console.error('GROQ_API_KEY not found in environment');
     res.status(500).json({ error: { message: 'Groq API key not configured' } });
     return;
   }
+
 
   try {
     const payload = req.body && typeof req.body === 'object' ? req.body : {};
