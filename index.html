@@ -64,7 +64,8 @@
   function syncSetupBannerVisibility() {
     const banner = document.getElementById('setup-banner');
     if(!banner) return;
-    banner.classList.remove('hidden');
+    // Using secure backend proxy, so hide the setup banner
+    banner.classList.add('hidden');
   }
   window.syncSetupBannerVisibility = syncSetupBannerVisibility;
   window.addEventListener('DOMContentLoaded', ()=>{ setTimeout(syncSetupBannerVisibility, 0); });
