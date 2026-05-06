@@ -8,10 +8,17 @@
     ],
     "rewrites": [
       {
+        "source": "/api/groq",
+        "function": "groqProxy"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
     ]
+  },
+  "functions": {
+    "source": "functions"
   },
   "firestore": {
     "rules": "firestore.rules"

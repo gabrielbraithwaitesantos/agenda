@@ -36,7 +36,7 @@
 
 <script type="module">
   // ── GROQ ──────────────────────────────────────────────
-  const GROQ_API_KEY = "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";
+  const GROQ_PROXY_URL = "/api/groq";
   const GROQ_MODEL   = "llama-3.3-70b-versatile"; // atualizado recomendado
 
   // ── FIREBASE (CDN imports + config) ─────────────────────
@@ -64,12 +64,7 @@
   function syncSetupBannerVisibility() {
     const banner = document.getElementById('setup-banner');
     if(!banner) return;
-    const key = (GROQ_API_KEY || '').trim();
-    if(key && key !== 'COLE_SUA_CHAVE_GROQ_AQUI') {
-      banner.classList.add('hidden');
-    } else {
-      banner.classList.remove('hidden');
-    }
+    banner.classList.remove('hidden');
   }
   window.syncSetupBannerVisibility = syncSetupBannerVisibility;
   window.addEventListener('DOMContentLoaded', ()=>{ setTimeout(syncSetupBannerVisibility, 0); });
@@ -116,7 +111,7 @@
     try{ if(window.handleAuthStateChange) window.handleAuthStateChange(user); }catch(e){ console.warn('handleAuthStateChange call failed', e); }
   });
   // expose to non-module scripts
-  window.GROQ_API_KEY = GROQ_API_KEY;
+  window.GROQ_PROXY_URL = GROQ_PROXY_URL;
   window.GROQ_MODEL = GROQ_MODEL;
   window.db = db;
   window.storage = storage;
@@ -305,13 +300,13 @@
   <span style="display:flex;gap:8px;align-items:center;">
     <div>
       <strong>Configuração:</strong>
-      <div style="font-size:12px;color:#ffd27a">Cole sua chave Groq em <code>GROQ_API_KEY</code> no topo do arquivo.</div>
+      <div style="font-size:12px;color:#ffd27a">A IA usa um proxy seguro no Firebase; altere o modelo abaixo se quiser.</div>
       <div style="margin-top:6px;font-size:12px">Modelo Groq ativo:
         <input id="groq-model-input" placeholder="modelo (ex: llama-3.3-70b-versatile)" style="margin-left:8px;padding:4px 6px;border-radius:6px;border:1px solid #5a5a60;background:#0f1113;color:#e8e9ec">
         <button class="cal-nav" onclick="setGroqModelFromInput()" style="margin-left:6px">Salvar</button>
       </div>
     </div>
-    <div style="font-size:12px;color:#ffd27a">Crie uma chave em <a href="https://console.groq.com" target="_blank">console.groq.com</a>. Para salvar na nuvem, configure o Firebase.</div>
+    <div style="font-size:12px;color:#ffd27a">Se quiser trocar o modelo, use o campo acima. A chave fica protegida no backend.</div>
   </span>
 </div>
 

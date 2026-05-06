@@ -2141,14 +2141,7 @@ async function sendMsg(){
 
   const thinking = addThinking();
 
-  // sem chave configurada → mensagem de ajuda
-  if(!window.GROQ_API_KEY || window.GROQ_API_KEY==='COLE_SUA_CHAVE_GROQ_AQUI'){
-    thinking.remove();
-    addMsg('ai','⚠️ Chave Groq não configurada ainda. Edite o arquivo <code>index.html</code>, cole sua chave em <strong>GROQ_API_KEY</strong> e recarregue a página. Crie uma grátis em console.groq.com.');
-    const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-    if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-    return;
-  }
+  const groqProxyUrl = window.GROQ_PROXY_URL || '/api/groq';
 
   const tasksSummary = tasks.length
     ? 'Tarefas já cadastradas:\n'+tasks.map(t=>`- ${t.name} (${t.cat}, ${t.date}${t.time?' '+t.time:''}, ~${t.est||'?'}min)`).join('\n')
@@ -2205,11 +2198,10 @@ ${tasksSummary}`;
 
 
   try {
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions',{ 
+    const resp = await fetch(groqProxyUrl,{ 
       method: 'POST',
       headers: {
-        'Content-Type':  'application/json',
-        'Authorization': 'Bearer '+window.GROQ_API_KEY
+        'Content-Type':  'application/json'
       },
       body: JSON.stringify({
         model:    window.GROQ_MODEL,
@@ -2777,18 +2769,12 @@ Se não houver receita para salvar, retorne null no lugar do JSON.`;
 // ── Culinária: send message handler ──────────────────────────────
 async function sendCulinariaMsg(text){
   const thinking = addThinking();
-  if(!window.GROQ_API_KEY || window.GROQ_API_KEY==='COLE_SUA_CHAVE_GROQ_AQUI'){
-    thinking.remove();
-    addMsg('ai','⚠️ Chave Groq não configurada. Configure GROQ_API_KEY.');
-    const sb = document.getElementById('send-btn'); const sbb = document.getElementById('send-btn-bottom');
-    if(sb) sb.disabled = false; if(sbb) sbb.disabled = false;
-    return;
-  }
   try{
+    const groqProxyUrl = window.GROQ_PROXY_URL || '/api/groq';
     const system = buildCulinariaSystemPrompt();
-    const resp = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+    const resp = await fetch(groqProxyUrl,{ 
       method:'POST',
-      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+window.GROQ_API_KEY },
+      headers:{ 'Content-Type':'application/json' },
       body: JSON.stringify({ model: window.GROQ_MODEL, messages:[{role:'system',content:system},{role:'user',content:text}], temperature:0.5, max_tokens:900 })
     });
     if(!resp.ok){
