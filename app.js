@@ -75,17 +75,17 @@ function normalizeProfile(profile){
 
 function buildGreeting(profile){
   const p = normalizeProfile(profile || {});
-  if(!p.name) return 'Bem-vindo moreno';
-  const prefix = p.gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
-  return `${prefix} ${p.name}`;
+  if(!p.name) return 'Bem-vindo';
+  const prefix = p.gender === 'fem' ? 'Bem-vinda' : 'Bem-vindo';
+  return `${prefix}, ${p.name}`;
 }
 
 function buildLiveGreeting(profile){
   const rawName = String(profile && profile.name ? profile.name : '').replace(/\s+/g, ' ').trim();
   const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
-  const prefix = gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  const prefix = gender === 'fem' ? 'Bem-vinda' : 'Bem-vindo';
   if(!rawName) return prefix;
-  return `${prefix} ${rawName}`;
+  return `${prefix}, ${rawName}`;
 }
 
 function updateSplashGreeting(profile, live = false){
@@ -203,7 +203,7 @@ async function openAccountPanel(){
     if(genderInput) genderInput.value = instant.gender || 'masc';
     renderAccountInfo(instant);
     const preview = document.getElementById('profile-preview');
-    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo moreno';
+    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo';
     const liveExample = document.getElementById('profile-live-example');
     if(liveExample) liveExample.textContent = instant.name ? buildLiveGreeting(instant) : '';
     const modal = document.getElementById('profile-modal');
@@ -217,7 +217,7 @@ async function openAccountPanel(){
       if(nameInput && document.activeElement !== nameInput) nameInput.value = currentUserProfile.name || '';
       if(genderInput && document.activeElement !== genderInput) genderInput.value = currentUserProfile.gender || 'masc';
       renderAccountInfo(currentUserProfile);
-      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo';
       if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
     }).catch(()=>{});
   }catch(e){ console.warn('openAccountPanel', e); }
@@ -261,11 +261,10 @@ async function refreshWelcomeGate(user){
       }
     }catch(e){}
 
-    showSplashUI();
     const profile = await loadUserProfile(user.uid);
     currentUserProfile = profile;
     if(profile){
-      updateSplashGreeting(profile); // atualiza com dados frescos do Firestore
+      updateSplashGreeting(profile);
       renderAccountInfo(profile);
       hideProfileModal();
       const preview = document.getElementById('profile-preview');
@@ -279,12 +278,13 @@ async function refreshWelcomeGate(user){
       if(nameInput) nameInput.value = '';
       if(genderInput) genderInput.value = 'masc';
       const preview = document.getElementById('profile-preview');
-      if(preview) preview.textContent = 'Bem-vindo moreno';
+      if(preview) preview.textContent = 'Bem-vindo';
       const liveExample = document.getElementById('profile-live-example');
       if(liveExample) liveExample.textContent = '';
       renderAccountInfo({ name:'', gender:'masc' });
       showProfileModal();
     }
+    showSplashUI();
   }catch(e){ console.warn('refreshWelcomeGate', e); }
 }
 
@@ -752,6 +752,14 @@ async function loadTasksForUser(uid){
 }
 
 // Called from auth state changes to load appropriate tasks
+function hideAppLoadingOverlay(){
+  const overlay = document.getElementById('app-loading-overlay');
+  if(!overlay) return;
+  overlay.style.opacity = '0';
+  setTimeout(()=>{ overlay.style.display = 'none'; }, 350);
+}
+setTimeout(hideAppLoadingOverlay, 5000);
+
 window.handleAuthStateChange = async function(user){
   welcomeGateHandled = true;
   try{
@@ -769,7 +777,7 @@ window.handleAuthStateChange = async function(user){
       if(dbgPanel) dbgPanel.remove();
       const el = document.getElementById('splash-tasks');
       if(el) el.innerHTML = '';
-      
+
       // Second: load user-specific tasks, messages, and profile
       try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
       await loadTasksForUser(user.uid);
@@ -785,7 +793,8 @@ window.handleAuthStateChange = async function(user){
           }
         }
       }catch(e){ console.warn('load messages failed', e); }
-      refreshWelcomeGate(user);
+      await refreshWelcomeGate(user);
+      hideAppLoadingOverlay();
     } else {
       // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
       tasks = [];
@@ -809,8 +818,9 @@ window.handleAuthStateChange = async function(user){
       if(el) el.innerHTML = '';
       const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      hideAppLoadingOverlay();
     }
-  }catch(e){ console.warn('handleAuthStateChange', e); }
+  }catch(e){ console.warn('handleAuthStateChange', e); hideAppLoadingOverlay(); }
 }
 
 // ── normalize and aggregates ───────────────────────────────────
@@ -1082,32 +1092,22 @@ function createTask(){
   try{ saveEventAndLearning('task.create', { name: t.name, date: t.date, cat: t.cat, est: t.est }); }catch(e){}
 }
 
-function addTaskForDate(dateStr){
-  const name = prompt('Nome da tarefa:');
-  if(!name) return;
-  const time = prompt('Hora (HH:MM) — opcional:', '');
-  const cat  = prompt('Categoria (trabalho|estudo|pessoal|projeto|outro):', 'outro') || 'outro';
-  const est  = parseInt(prompt('Estimativa em minutos:', '60')||'60',10) || 60;
-  const t = { name, date: dateStr, time: time||null, cat, est };
-  tasks.push(t);
-  saveTasks(); renderCal(); renderTasks();
-  try{ saveEventAndLearning('task.create', { name: t.name, date: t.date, cat: t.cat, est: t.est }); }catch(e){}
-}
+
 
 function editTask(i){
   if(typeof i!=='number') return;
   const t = tasks[i]; if(!t) return;
-  // Preencher modal com dados atuais
   const modal = document.getElementById('edit-task-modal');
   if(!modal) return;
+  const titleEl = document.getElementById('edit-task-modal-title'); if(titleEl) titleEl.textContent = 'Editar tarefa';
   modal.classList.remove('hidden');
   modal.dataset.taskIndex = i;
+  delete modal.dataset.createDate;
   document.getElementById('edit-task-name').value = t.name || '';
   document.getElementById('edit-task-date').value = t.date || '';
   document.getElementById('edit-task-time').value = t.time || '';
   document.getElementById('edit-task-cat').value = t.cat || 'outro';
   document.getElementById('edit-task-est').value = t.est || 60;
-  // Anexos (exibição simplificada)
   const attDiv = document.getElementById('edit-task-attachments');
   attDiv.innerHTML = '';
   if(t.attachment){
@@ -1116,9 +1116,7 @@ function editTask(i){
     attDiv.appendChild(a);
   }
   document.getElementById('edit-task-message').textContent = '';
-  // Cancelar fecha modal
   document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); };
-  // Adicionar novo anexo (substitui o anterior)
   document.getElementById('edit-task-add-attachment').onchange = function(ev){
     const file = ev.target.files[0];
     if(file){
@@ -1130,13 +1128,60 @@ function editTask(i){
   };
 }
 
-function deleteTask(i){
-  if(!confirm('Remover esta tarefa?')) return;
+function addTaskForDate(dateStr){
+  const modal = document.getElementById('edit-task-modal');
+  if(!modal) return;
+  const titleEl2 = document.getElementById('edit-task-modal-title'); if(titleEl2) titleEl2.textContent = 'Nova tarefa';
+  modal.classList.remove('hidden');
+  modal.dataset.createDate = dateStr;
+  delete modal.dataset.taskIndex;
+  document.getElementById('edit-task-name').value = '';
+  document.getElementById('edit-task-date').value = dateStr || '';
+  document.getElementById('edit-task-time').value = '';
+  document.getElementById('edit-task-cat').value = 'outro';
+  document.getElementById('edit-task-est').value = 60;
+  document.getElementById('edit-task-attachments').innerHTML = '';
+  document.getElementById('edit-task-message').textContent = '';
+  document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); showDatePopover(dateStr); };
+  document.getElementById('edit-task-add-attachment').onchange = null;
+}
+
+let __deleteIndex = null;
+let __deleteReopenDate = null;
+function deleteTask(i, reopenDate){
+  const t = tasks[i]; if(!t) return;
+  __deleteIndex = i;
+  __deleteReopenDate = reopenDate || null;
+  const label = document.getElementById('delete-confirm-label');
+  if(label) label.textContent = `"${t.name}" será removida permanentemente.`;
+  const modal = document.getElementById('delete-confirm-modal');
+  modal.style.removeProperty('display');
+  modal.classList.remove('hidden');
+  const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden');
+  document.getElementById('delete-confirm-btn').onclick = confirmDeleteTask;
+}
+function closeDeleteConfirm(){
+  __deleteIndex = null;
+  const reopenDate = __deleteReopenDate;
+  __deleteReopenDate = null;
+  const m = document.getElementById('delete-confirm-modal');
+  m.classList.add('hidden'); m.style.removeProperty('display');
+  if(reopenDate) showDatePopover(reopenDate);
+}
+function confirmDeleteTask(){
+  if(__deleteIndex === null) return closeDeleteConfirm();
+  const i = __deleteIndex;
+  const reopenDate = __deleteReopenDate;
+  __deleteIndex = null;
+  __deleteReopenDate = null;
+  const m = document.getElementById('delete-confirm-modal');
+  m.classList.add('hidden'); m.style.removeProperty('display');
   const removed = tasks.splice(i,1)[0];
   console.debug('deleteTask: removed', removed && removed.name, 'index=', i);
   saveTasks(); renderCal(); renderTasks();
   try{ saveEventAndLearning('task.delete', { index: i, task: removed }); }catch(e){}
   deleteTaskAttachment(removed);
+  if(reopenDate) showDatePopover(reopenDate);
 }
 
 function deleteTaskAttachment(task){
@@ -1228,18 +1273,23 @@ function showDatePopover(dateStr){
   html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${dateStr}</div>`;
   if(!items.length){ html += '<div class="no-tasks">Nenhuma tarefa nesta data</div>'; }
     for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    html += `<div class="popover-item">
+    const done = !!t.completedAt;
+    const isRunning = activeTimer && (activeTimer.index === i || (activeTimer.id && t._id && activeTimer.id === t._id));
+    html += `<div class="popover-item${done ? ' popover-item-done' : ''}">
   <div class="popover-item-top">
-    <div class="task-dot" style="background:${c};flex-shrink:0"></div>
+    <div class="task-dot" style="background:${c};flex-shrink:0${done ? ';opacity:0.4' : ''}"></div>
     <div style="flex:1;min-width:0">
-      <strong style="font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.name)}</strong>
-      <div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min</div>
+      <strong style="font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis${done ? ';text-decoration:line-through;opacity:0.5' : ''}">${escapeHtml(t.name)}</strong>
+      <div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min${done ? ' · <span style="color:var(--green)">concluída</span>' : ''}</div>
       ${taskAttachmentHtml(t)}${taskFlagsHtml(t)}
     </div>
   </div>
   <div class="popover-item-actions">
+    ${!done ? `<button class="cal-nav small done-btn" onclick="markTaskDone(${i}, '${t.date}');">Concluir</button>` : ''}
+    ${!done ? `<button class="cal-nav small${isRunning ? ' running-btn' : ''}" onclick="toggleTimer(${i}); showDatePopover('${t.date}');">${isRunning ? 'Parar' : 'Iniciar'}</button>` : ''}
+    ${done ? `<button class="cal-nav small" onclick="undoComplete(${i}, '${t.date}');">Desfazer</button>` : ''}
     <button class="cal-nav small" onclick="editTask(${i}); closeDatePopover();">Editar</button>
-    <button class="cal-nav small" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button>
+    <button class="cal-nav small" style="border-color:rgba(245,99,66,0.3);color:#ff6b5b" onclick="deleteTask(${i}, '${t.date}');">Excluir</button>
   </div>
 </div>`;
   }
@@ -1248,7 +1298,7 @@ function showDatePopover(dateStr){
   pop.classList.remove('hidden');
   // set add button handler (add task prefilled with date)
   const addBtn = document.getElementById('popover-add-btn');
-  if(addBtn){ addBtn.onclick = ()=>{ addTaskForDate(dateStr); closeDatePopover(); }; }
+  if(addBtn){ addBtn.onclick = ()=>{ closeDatePopover(); addTaskForDate(dateStr); }; }
 }
 
 function closeDatePopover(){ const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden'); }
@@ -1264,23 +1314,32 @@ document.addEventListener('DOMContentLoaded', function(){
     form.onsubmit = function(ev){
       ev.preventDefault();
       const modal = document.getElementById('edit-task-modal');
-      const i = parseInt(modal.dataset.taskIndex, 10);
-      if(isNaN(i) || !tasks[i]) return;
       const name = document.getElementById('edit-task-name').value.trim();
+      if(!name) return;
       const date = document.getElementById('edit-task-date').value;
       const time = document.getElementById('edit-task-time').value;
       const cat  = document.getElementById('edit-task-cat').value;
       const est  = parseInt(document.getElementById('edit-task-est').value, 10) || 60;
-      // Anexo
       const attDiv = document.getElementById('edit-task-attachments');
-      let attachment = tasks[i].attachment;
-      if(attDiv.dataset.newAttachment){
-        attachment = attDiv.dataset.newAttachment;
+      const reopenDate = date;
+      if(modal.dataset.createDate !== undefined){
+        const t = { name, date, time: time||null, cat, est };
+        if(attDiv.dataset.newAttachment) t.attachment = attDiv.dataset.newAttachment;
+        tasks.push(t);
+        saveTasks(); renderCal(); renderTasks();
+        modal.classList.add('hidden');
+        showDatePopover(reopenDate);
+        try{ saveEventAndLearning('task.create', { name, date, cat, est }); }catch(e){}
+      } else {
+        const i = parseInt(modal.dataset.taskIndex, 10);
+        if(isNaN(i) || !tasks[i]) return;
+        let attachment = tasks[i].attachment;
+        if(attDiv.dataset.newAttachment) attachment = attDiv.dataset.newAttachment;
+        tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
+        saveTasks(); renderCal(); renderTasks();
+        modal.classList.add('hidden');
+        try{ saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
       }
-      tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
-      saveTasks(); renderCal(); renderTasks();
-      modal.classList.add('hidden');
-      try{ saveEventAndLearning && saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
     };
   }
 });
@@ -1293,6 +1352,10 @@ window.exportTasks = exportTasks;
 window.importTasks = importTasks;
 window.showTasksForDate = showTasksForDate;
 window.closeDatePopover = closeDatePopover;
+window.showDatePopover = showDatePopover;
+window.closeDeleteConfirm = closeDeleteConfirm;
+window.confirmDeleteTask = confirmDeleteTask;
+window.undoComplete = undoComplete;
 // expose timer and task actions for legacy inline handlers and external calls
 window.toggleTimer = toggleTimer;
 window.markTaskDone = markTaskDone;
@@ -2805,17 +2868,33 @@ async function saveEventAndLearning(type, payload){
 
 // ── mark task done modal and handlers ───────────────────────
 let __completeIndex = null;
-function markTaskDone(i){
+let __completeReopenDate = null;
+function markTaskDone(i, reopenDate){
   const t = tasks[i]; if(!t) return alert('Tarefa não encontrada');
   __completeIndex = i;
+  __completeReopenDate = reopenDate || null;
   const label = document.getElementById('complete-task-label'); if(label) label.textContent = `${t.name} — ${t.date}${t.time? ' · '+t.time : ''}`;
   const inp = document.getElementById('complete-minutes'); if(inp){ inp.value = t.actualDuration || t.est || ''; }
-  document.getElementById('complete-modal').classList.remove('hidden');
+  const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden');
+  const modal = document.getElementById('complete-modal');
+  modal.style.removeProperty('display');
+  modal.classList.remove('hidden');
 }
 
-function hideCompleteModal(){
+function undoComplete(i, reopenDate){
+  const t = tasks[i]; if(!t) return;
+  delete t.completedAt;
+  delete t.actualDuration;
+  saveTasks(); renderCal(); renderTasks();
+  if(reopenDate) showDatePopover(reopenDate);
+}
+
+function hideCompleteModal({ reopen = true } = {}){
   __completeIndex = null;
+  const reopenDate = __completeReopenDate;
+  __completeReopenDate = null;
   document.getElementById('complete-modal').classList.add('hidden');
+  if(reopen && reopenDate) showDatePopover(reopenDate);
 }
 
 async function confirmComplete(){
@@ -2829,9 +2908,12 @@ async function confirmComplete(){
     t.completedAt = new Date().toISOString();
     t.actualDuration = minutes;
     completedName = t.name;
+    const taskDate = t.date;
     // disable confirm button to avoid duplicate clicks
     const btnC = document.getElementById('complete-confirm-btn'); if(btnC) btnC.disabled = true;
+    hideCompleteModal({ reopen: false });
     saveTasks(); renderCal(); renderTasks();
+    showDatePopover(taskDate);
     // save event to firebase (best-effort)
     try{
       await saveEventAndLearning('task.complete', { taskId: t._id || null, name: t.name, date: t.date, minutes });
@@ -2841,12 +2923,12 @@ async function confirmComplete(){
     console.error('confirmComplete error', err);
   }finally{
     // always try to hide modal and re-enable button
-    try{ hideCompleteModal(); }catch(e){ console.warn('hideCompleteModal failed', e); }
+    try{ hideCompleteModal({ reopen: false }); }catch(e){ console.warn('hideCompleteModal failed', e); }
     const btnC2 = document.getElementById('complete-confirm-btn'); if(btnC2) btnC2.disabled = false;
-    // defensive: if the modal element is still visible for any reason, force-hide it (inline style)
+    // defensive: ensure modal is hidden
     try{
       const modalEl = document.getElementById('complete-modal');
-      if(modalEl){ modalEl.classList.add('hidden'); modalEl.style.display = 'none'; modalEl.setAttribute('aria-hidden','true'); }
+      if(modalEl){ modalEl.classList.add('hidden'); modalEl.style.removeProperty('display'); }
     }catch(e){ console.warn('force-hide complete modal failed', e); }
     // refresh splash tasks so the completed task disappears but keep the splash open
     try{ renderSplashTasks(); }catch(e){ console.warn('renderSplashTasks after complete', e); }

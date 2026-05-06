@@ -243,6 +243,21 @@
 </head>
 <body>
 
+<div id="app-loading-overlay" style="
+  position:fixed; inset:0; z-index:9999;
+  background:var(--bg, #111);
+  display:flex; align-items:center; justify-content:center;
+  transition:opacity 0.3s ease;
+">
+  <div style="text-align:center; color:var(--muted, #888); font-size:14px;">
+    <div style="width:32px;height:32px;border:3px solid #333;border-top-color:#4f8ef7;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px"></div>
+    Carregando...
+  </div>
+</div>
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
 <!-- banner de configuração -->
 <div id="setup-banner">
   <span>⚠</span>
@@ -320,7 +335,7 @@
   <div class="splash-card">
     <div class="splash-header">
       <div class="logo">💬</div>
-      <h2 id="splash-greeting">Bem-vindo moreno</h2>
+      <h2 id="splash-greeting">Bem-vindo</h2>
       <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
     </div>
     <div class="splash-tabs">
@@ -354,11 +369,11 @@
     <div class="profile-field">
       <label for="profile-gender">Saudação</label>
       <select id="profile-gender" onchange="syncProfilePreview()">
-        <option value="masc">Masculino — Bem-vindo moreno</option>
-        <option value="fem">Feminino — Bem-vinda morena</option>
+        <option value="masc">Masculino — Bem-vindo</option>
+        <option value="fem">Feminino — Bem-vinda</option>
       </select>
     </div>
-    <div id="profile-preview" class="profile-preview">Bem-vindo moreno</div>
+    <div id="profile-preview" class="profile-preview">Bem-vindo</div>
     <div id="profile-message" class="profile-message"></div>
     <div class="modal-actions">
       <button type="button" class="cal-nav" id="profile-save-btn" onclick="saveWelcomeProfile()">Salvar</button>
@@ -368,44 +383,45 @@
 
 <!-- MODAL DE EDIÇÃO DE TAREFA -->
 <div id="edit-task-modal" class="hidden">
-  <div class="modal-card">
-    <h3>Editar tarefa</h3>
+  <div class="modal-card task-form-card">
+    <h3 id="edit-task-modal-title">Editar tarefa</h3>
     <form id="edit-task-form">
-      <div class="profile-field">
+      <div class="task-form-field">
         <label for="edit-task-name">Nome</label>
-        <input id="edit-task-name" name="name" type="text" required>
+        <input id="edit-task-name" name="name" type="text" placeholder="Ex: estudar para prova" required>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-date">Data</label>
-        <input id="edit-task-date" name="date" type="date" required>
+      <div class="task-form-row">
+        <div class="task-form-field">
+          <label for="edit-task-date">Data</label>
+          <input id="edit-task-date" name="date" type="date" required>
+        </div>
+        <div class="task-form-field">
+          <label for="edit-task-time">Hora</label>
+          <input id="edit-task-time" name="time" type="time">
+        </div>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-time">Hora</label>
-        <input id="edit-task-time" name="time" type="time">
+      <div class="task-form-row">
+        <div class="task-form-field">
+          <label for="edit-task-cat">Categoria</label>
+          <select id="edit-task-cat" name="cat">
+            <option value="trabalho">Trabalho</option>
+            <option value="estudo">Estudo</option>
+            <option value="pessoal">Pessoal</option>
+            <option value="projeto">Projeto</option>
+            <option value="outro">Outro</option>
+          </select>
+        </div>
+        <div class="task-form-field">
+          <label for="edit-task-est">Duração (min)</label>
+          <input id="edit-task-est" name="est" type="number" min="1" step="5" placeholder="60">
+        </div>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-cat">Categoria</label>
-        <select id="edit-task-cat" name="cat">
-          <option value="trabalho">Trabalho</option>
-          <option value="estudo">Estudo</option>
-          <option value="pessoal">Pessoal</option>
-          <option value="projeto">Projeto</option>
-          <option value="outro">Outro</option>
-        </select>
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-est">Estimativa (min)</label>
-        <input id="edit-task-est" name="est" type="number" min="1" step="1">
-      </div>
-      <div class="profile-field">
-        <label>Anexos</label>
-        <div id="edit-task-attachments"></div>
-        <input id="edit-task-add-attachment" type="file" style="margin-top:8px">
-      </div>
+      <div id="edit-task-attachments" style="display:none"></div>
+      <input id="edit-task-add-attachment" type="file" style="display:none">
       <div id="edit-task-message" class="profile-message"></div>
       <div class="modal-actions">
         <button type="button" class="cal-nav" id="edit-task-cancel-btn">Cancelar</button>
-        <button type="submit" class="cal-nav">Salvar</button>
+        <button type="submit" class="cal-nav task-form-save-btn">Salvar</button>
       </div>
     </form>
   </div>
@@ -600,6 +616,16 @@
 </div>
 
 <!-- logout modal (replace native confirm) -->
+<div id="delete-confirm-modal" class="hidden">
+  <div class="modal-card">
+    <h3>Excluir tarefa</h3>
+    <div id="delete-confirm-label" style="color:var(--muted);font-size:13px;margin-top:6px">Tem certeza?</div>
+    <div class="modal-actions">
+      <button type="button" class="cal-nav" onclick="closeDeleteConfirm()">Cancelar</button>
+      <button type="button" class="cal-nav" id="delete-confirm-btn" style="border-color:rgba(245,99,66,0.4);color:#ff6b5b">Excluir</button>
+    </div>
+  </div>
+</div>
 <div id="logout-modal" class="hidden">
   <div class="modal-card">
     <h3>Tem certeza que deseja sair?</h3>

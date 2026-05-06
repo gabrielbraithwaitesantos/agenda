@@ -356,17 +356,17 @@ function normalizeProfile(profile){
 
 function buildGreeting(profile){
   const p = normalizeProfile(profile || {});
-  if(!p.name) return 'Bem-vindo moreno';
-  const prefix = p.gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
-  return `${prefix} ${p.name}`;
+  if(!p.name) return 'Bem-vindo';
+  const prefix = p.gender === 'fem' ? 'Bem-vinda' : 'Bem-vindo';
+  return `${prefix}, ${p.name}`;
 }
 
 function buildLiveGreeting(profile){
   const rawName = String(profile && profile.name ? profile.name : '').replace(/\s+/g, ' ').trim();
   const gender = profile && profile.gender === 'fem' ? 'fem' : 'masc';
-  const prefix = gender === 'fem' ? 'Bem-vinda morena' : 'Bem-vindo moreno';
+  const prefix = gender === 'fem' ? 'Bem-vinda' : 'Bem-vindo';
   if(!rawName) return prefix;
-  return `${prefix} ${rawName}`;
+  return `${prefix}, ${rawName}`;
 }
 
 function updateSplashGreeting(profile, live = false){
@@ -484,7 +484,7 @@ async function openAccountPanel(){
     if(genderInput) genderInput.value = instant.gender || 'masc';
     renderAccountInfo(instant);
     const preview = document.getElementById('profile-preview');
-    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo moreno';
+    if(preview) preview.textContent = instant.name ? buildLiveGreeting(instant) : 'Bem-vindo';
     const liveExample = document.getElementById('profile-live-example');
     if(liveExample) liveExample.textContent = instant.name ? buildLiveGreeting(instant) : '';
     const modal = document.getElementById('profile-modal');
@@ -498,7 +498,7 @@ async function openAccountPanel(){
       if(nameInput && document.activeElement !== nameInput) nameInput.value = currentUserProfile.name || '';
       if(genderInput && document.activeElement !== genderInput) genderInput.value = currentUserProfile.gender || 'masc';
       renderAccountInfo(currentUserProfile);
-      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo moreno';
+      if(preview) preview.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : 'Bem-vindo';
       if(liveExample) liveExample.textContent = currentUserProfile.name ? buildLiveGreeting(currentUserProfile) : '';
     }).catch(()=>{});
   }catch(e){ console.warn('openAccountPanel', e); }
@@ -542,11 +542,10 @@ async function refreshWelcomeGate(user){
       }
     }catch(e){}
 
-    showSplashUI();
     const profile = await loadUserProfile(user.uid);
     currentUserProfile = profile;
     if(profile){
-      updateSplashGreeting(profile); // atualiza com dados frescos do Firestore
+      updateSplashGreeting(profile);
       renderAccountInfo(profile);
       hideProfileModal();
       const preview = document.getElementById('profile-preview');
@@ -560,12 +559,13 @@ async function refreshWelcomeGate(user){
       if(nameInput) nameInput.value = '';
       if(genderInput) genderInput.value = 'masc';
       const preview = document.getElementById('profile-preview');
-      if(preview) preview.textContent = 'Bem-vindo moreno';
+      if(preview) preview.textContent = 'Bem-vindo';
       const liveExample = document.getElementById('profile-live-example');
       if(liveExample) liveExample.textContent = '';
       renderAccountInfo({ name:'', gender:'masc' });
       showProfileModal();
     }
+    showSplashUI();
   }catch(e){ console.warn('refreshWelcomeGate', e); }
 }
 
@@ -1033,6 +1033,14 @@ async function loadTasksForUser(uid){
 }
 
 // Called from auth state changes to load appropriate tasks
+function hideAppLoadingOverlay(){
+  const overlay = document.getElementById('app-loading-overlay');
+  if(!overlay) return;
+  overlay.style.opacity = '0';
+  setTimeout(()=>{ overlay.style.display = 'none'; }, 350);
+}
+setTimeout(hideAppLoadingOverlay, 5000);
+
 window.handleAuthStateChange = async function(user){
   welcomeGateHandled = true;
   try{
@@ -1050,7 +1058,7 @@ window.handleAuthStateChange = async function(user){
       if(dbgPanel) dbgPanel.remove();
       const el = document.getElementById('splash-tasks');
       if(el) el.innerHTML = '';
-      
+
       // Second: load user-specific tasks, messages, and profile
       try{ console.debug('DEBUG: before loadTasksForUser, uid=', user.uid); }catch(e){}
       await loadTasksForUser(user.uid);
@@ -1066,7 +1074,8 @@ window.handleAuthStateChange = async function(user){
           }
         }
       }catch(e){ console.warn('load messages failed', e); }
-      refreshWelcomeGate(user);
+      await refreshWelcomeGate(user);
+      hideAppLoadingOverlay();
     } else {
       // not authenticated: clear in-memory tasks, messages, attachments so the next account can't inherit them
       tasks = [];
@@ -1090,8 +1099,9 @@ window.handleAuthStateChange = async function(user){
       if(el) el.innerHTML = '';
       const splash = document.getElementById('splash'); if(splash) splash.style.display = 'none';
       computeAggregates(); renderCal(); renderTasks(); try{ renderSplashTasks(); }catch(e){}
+      hideAppLoadingOverlay();
     }
-  }catch(e){ console.warn('handleAuthStateChange', e); }
+  }catch(e){ console.warn('handleAuthStateChange', e); hideAppLoadingOverlay(); }
 }
 
 // ── normalize and aggregates ───────────────────────────────────
@@ -1363,32 +1373,22 @@ function createTask(){
   try{ saveEventAndLearning('task.create', { name: t.name, date: t.date, cat: t.cat, est: t.est }); }catch(e){}
 }
 
-function addTaskForDate(dateStr){
-  const name = prompt('Nome da tarefa:');
-  if(!name) return;
-  const time = prompt('Hora (HH:MM) — opcional:', '');
-  const cat  = prompt('Categoria (trabalho|estudo|pessoal|projeto|outro):', 'outro') || 'outro';
-  const est  = parseInt(prompt('Estimativa em minutos:', '60')||'60',10) || 60;
-  const t = { name, date: dateStr, time: time||null, cat, est };
-  tasks.push(t);
-  saveTasks(); renderCal(); renderTasks();
-  try{ saveEventAndLearning('task.create', { name: t.name, date: t.date, cat: t.cat, est: t.est }); }catch(e){}
-}
+
 
 function editTask(i){
   if(typeof i!=='number') return;
   const t = tasks[i]; if(!t) return;
-  // Preencher modal com dados atuais
   const modal = document.getElementById('edit-task-modal');
   if(!modal) return;
+  const titleEl = document.getElementById('edit-task-modal-title'); if(titleEl) titleEl.textContent = 'Editar tarefa';
   modal.classList.remove('hidden');
   modal.dataset.taskIndex = i;
+  delete modal.dataset.createDate;
   document.getElementById('edit-task-name').value = t.name || '';
   document.getElementById('edit-task-date').value = t.date || '';
   document.getElementById('edit-task-time').value = t.time || '';
   document.getElementById('edit-task-cat').value = t.cat || 'outro';
   document.getElementById('edit-task-est').value = t.est || 60;
-  // Anexos (exibição simplificada)
   const attDiv = document.getElementById('edit-task-attachments');
   attDiv.innerHTML = '';
   if(t.attachment){
@@ -1397,9 +1397,7 @@ function editTask(i){
     attDiv.appendChild(a);
   }
   document.getElementById('edit-task-message').textContent = '';
-  // Cancelar fecha modal
   document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); };
-  // Adicionar novo anexo (substitui o anterior)
   document.getElementById('edit-task-add-attachment').onchange = function(ev){
     const file = ev.target.files[0];
     if(file){
@@ -1411,13 +1409,60 @@ function editTask(i){
   };
 }
 
-function deleteTask(i){
-  if(!confirm('Remover esta tarefa?')) return;
+function addTaskForDate(dateStr){
+  const modal = document.getElementById('edit-task-modal');
+  if(!modal) return;
+  const titleEl2 = document.getElementById('edit-task-modal-title'); if(titleEl2) titleEl2.textContent = 'Nova tarefa';
+  modal.classList.remove('hidden');
+  modal.dataset.createDate = dateStr;
+  delete modal.dataset.taskIndex;
+  document.getElementById('edit-task-name').value = '';
+  document.getElementById('edit-task-date').value = dateStr || '';
+  document.getElementById('edit-task-time').value = '';
+  document.getElementById('edit-task-cat').value = 'outro';
+  document.getElementById('edit-task-est').value = 60;
+  document.getElementById('edit-task-attachments').innerHTML = '';
+  document.getElementById('edit-task-message').textContent = '';
+  document.getElementById('edit-task-cancel-btn').onclick = ()=>{ modal.classList.add('hidden'); showDatePopover(dateStr); };
+  document.getElementById('edit-task-add-attachment').onchange = null;
+}
+
+let __deleteIndex = null;
+let __deleteReopenDate = null;
+function deleteTask(i, reopenDate){
+  const t = tasks[i]; if(!t) return;
+  __deleteIndex = i;
+  __deleteReopenDate = reopenDate || null;
+  const label = document.getElementById('delete-confirm-label');
+  if(label) label.textContent = `"${t.name}" será removida permanentemente.`;
+  const modal = document.getElementById('delete-confirm-modal');
+  modal.style.removeProperty('display');
+  modal.classList.remove('hidden');
+  const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden');
+  document.getElementById('delete-confirm-btn').onclick = confirmDeleteTask;
+}
+function closeDeleteConfirm(){
+  __deleteIndex = null;
+  const reopenDate = __deleteReopenDate;
+  __deleteReopenDate = null;
+  const m = document.getElementById('delete-confirm-modal');
+  m.classList.add('hidden'); m.style.removeProperty('display');
+  if(reopenDate) showDatePopover(reopenDate);
+}
+function confirmDeleteTask(){
+  if(__deleteIndex === null) return closeDeleteConfirm();
+  const i = __deleteIndex;
+  const reopenDate = __deleteReopenDate;
+  __deleteIndex = null;
+  __deleteReopenDate = null;
+  const m = document.getElementById('delete-confirm-modal');
+  m.classList.add('hidden'); m.style.removeProperty('display');
   const removed = tasks.splice(i,1)[0];
   console.debug('deleteTask: removed', removed && removed.name, 'index=', i);
   saveTasks(); renderCal(); renderTasks();
   try{ saveEventAndLearning('task.delete', { index: i, task: removed }); }catch(e){}
   deleteTaskAttachment(removed);
+  if(reopenDate) showDatePopover(reopenDate);
 }
 
 function deleteTaskAttachment(task){
@@ -1509,14 +1554,32 @@ function showDatePopover(dateStr){
   html += `<div style="font-size:13px;color:var(--muted);margin-bottom:8px">${dateStr}</div>`;
   if(!items.length){ html += '<div class="no-tasks">Nenhuma tarefa nesta data</div>'; }
     for(const it of items){ const t = it.t; const i = it.i; const c = CAT_COLORS[t.cat]||CAT_COLORS.outro;
-    html += `<div class="popover-item"><div class="left"><div class="task-dot" style="background:${c}"></div><div><strong>${escapeHtml(t.name)}</strong><div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min</div>${taskAttachmentHtml(t)}${taskFlagsHtml(t)}</div></div><div style="display:flex;gap:8px"><button class="cal-nav" onclick="editTask(${i}); closeDatePopover();">Editar</button><button class="cal-nav" onclick="deleteTask(${i}); closeDatePopover();">Excluir</button></div></div>`;
+    const done = !!t.completedAt;
+    const isRunning = activeTimer && (activeTimer.index === i || (activeTimer.id && t._id && activeTimer.id === t._id));
+    html += `<div class="popover-item${done ? ' popover-item-done' : ''}">
+  <div class="popover-item-top">
+    <div class="task-dot" style="background:${c};flex-shrink:0${done ? ';opacity:0.4' : ''}"></div>
+    <div style="flex:1;min-width:0">
+      <strong style="font-size:13px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis${done ? ';text-decoration:line-through;opacity:0.5' : ''}">${escapeHtml(t.name)}</strong>
+      <div class="meta">${t.time? escapeHtml(t.time)+' · ' : ''}${escapeHtml(t.cat||'')} · ${escapeHtml(String(t.est||''))}min${done ? ' · <span style="color:var(--green)">concluída</span>' : ''}</div>
+      ${taskAttachmentHtml(t)}${taskFlagsHtml(t)}
+    </div>
+  </div>
+  <div class="popover-item-actions">
+    ${!done ? `<button class="cal-nav small done-btn" onclick="markTaskDone(${i}, '${t.date}');">Concluir</button>` : ''}
+    ${!done ? `<button class="cal-nav small${isRunning ? ' running-btn' : ''}" onclick="toggleTimer(${i}); showDatePopover('${t.date}');">${isRunning ? 'Parar' : 'Iniciar'}</button>` : ''}
+    ${done ? `<button class="cal-nav small" onclick="undoComplete(${i}, '${t.date}');">Desfazer</button>` : ''}
+    <button class="cal-nav small" onclick="editTask(${i}); closeDatePopover();">Editar</button>
+    <button class="cal-nav small" style="border-color:rgba(245,99,66,0.3);color:#ff6b5b" onclick="deleteTask(${i}, '${t.date}');">Excluir</button>
+  </div>
+</div>`;
   }
   body.innerHTML = html;
   // show
   pop.classList.remove('hidden');
   // set add button handler (add task prefilled with date)
   const addBtn = document.getElementById('popover-add-btn');
-  if(addBtn){ addBtn.onclick = ()=>{ addTaskForDate(dateStr); closeDatePopover(); }; }
+  if(addBtn){ addBtn.onclick = ()=>{ closeDatePopover(); addTaskForDate(dateStr); }; }
 }
 
 function closeDatePopover(){ const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden'); }
@@ -1532,23 +1595,32 @@ document.addEventListener('DOMContentLoaded', function(){
     form.onsubmit = function(ev){
       ev.preventDefault();
       const modal = document.getElementById('edit-task-modal');
-      const i = parseInt(modal.dataset.taskIndex, 10);
-      if(isNaN(i) || !tasks[i]) return;
       const name = document.getElementById('edit-task-name').value.trim();
+      if(!name) return;
       const date = document.getElementById('edit-task-date').value;
       const time = document.getElementById('edit-task-time').value;
       const cat  = document.getElementById('edit-task-cat').value;
       const est  = parseInt(document.getElementById('edit-task-est').value, 10) || 60;
-      // Anexo
       const attDiv = document.getElementById('edit-task-attachments');
-      let attachment = tasks[i].attachment;
-      if(attDiv.dataset.newAttachment){
-        attachment = attDiv.dataset.newAttachment;
+      const reopenDate = date;
+      if(modal.dataset.createDate !== undefined){
+        const t = { name, date, time: time||null, cat, est };
+        if(attDiv.dataset.newAttachment) t.attachment = attDiv.dataset.newAttachment;
+        tasks.push(t);
+        saveTasks(); renderCal(); renderTasks();
+        modal.classList.add('hidden');
+        showDatePopover(reopenDate);
+        try{ saveEventAndLearning('task.create', { name, date, cat, est }); }catch(e){}
+      } else {
+        const i = parseInt(modal.dataset.taskIndex, 10);
+        if(isNaN(i) || !tasks[i]) return;
+        let attachment = tasks[i].attachment;
+        if(attDiv.dataset.newAttachment) attachment = attDiv.dataset.newAttachment;
+        tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
+        saveTasks(); renderCal(); renderTasks();
+        modal.classList.add('hidden');
+        try{ saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
       }
-      tasks[i] = { ...tasks[i], name, date, time, cat, est, attachment };
-      saveTasks(); renderCal(); renderTasks();
-      modal.classList.add('hidden');
-      try{ saveEventAndLearning && saveEventAndLearning('task.update', { index: i, task: tasks[i] }); }catch(e){}
     };
   }
 });
@@ -1561,6 +1633,10 @@ window.exportTasks = exportTasks;
 window.importTasks = importTasks;
 window.showTasksForDate = showTasksForDate;
 window.closeDatePopover = closeDatePopover;
+window.showDatePopover = showDatePopover;
+window.closeDeleteConfirm = closeDeleteConfirm;
+window.confirmDeleteTask = confirmDeleteTask;
+window.undoComplete = undoComplete;
 // expose timer and task actions for legacy inline handlers and external calls
 window.toggleTimer = toggleTimer;
 window.markTaskDone = markTaskDone;
@@ -3073,17 +3149,33 @@ async function saveEventAndLearning(type, payload){
 
 // ── mark task done modal and handlers ───────────────────────
 let __completeIndex = null;
-function markTaskDone(i){
+let __completeReopenDate = null;
+function markTaskDone(i, reopenDate){
   const t = tasks[i]; if(!t) return alert('Tarefa não encontrada');
   __completeIndex = i;
+  __completeReopenDate = reopenDate || null;
   const label = document.getElementById('complete-task-label'); if(label) label.textContent = `${t.name} — ${t.date}${t.time? ' · '+t.time : ''}`;
   const inp = document.getElementById('complete-minutes'); if(inp){ inp.value = t.actualDuration || t.est || ''; }
-  document.getElementById('complete-modal').classList.remove('hidden');
+  const pop = document.getElementById('date-popover'); if(pop) pop.classList.add('hidden');
+  const modal = document.getElementById('complete-modal');
+  modal.style.removeProperty('display');
+  modal.classList.remove('hidden');
 }
 
-function hideCompleteModal(){
+function undoComplete(i, reopenDate){
+  const t = tasks[i]; if(!t) return;
+  delete t.completedAt;
+  delete t.actualDuration;
+  saveTasks(); renderCal(); renderTasks();
+  if(reopenDate) showDatePopover(reopenDate);
+}
+
+function hideCompleteModal({ reopen = true } = {}){
   __completeIndex = null;
+  const reopenDate = __completeReopenDate;
+  __completeReopenDate = null;
   document.getElementById('complete-modal').classList.add('hidden');
+  if(reopen && reopenDate) showDatePopover(reopenDate);
 }
 
 async function confirmComplete(){
@@ -3097,9 +3189,12 @@ async function confirmComplete(){
     t.completedAt = new Date().toISOString();
     t.actualDuration = minutes;
     completedName = t.name;
+    const taskDate = t.date;
     // disable confirm button to avoid duplicate clicks
     const btnC = document.getElementById('complete-confirm-btn'); if(btnC) btnC.disabled = true;
+    hideCompleteModal({ reopen: false });
     saveTasks(); renderCal(); renderTasks();
+    showDatePopover(taskDate);
     // save event to firebase (best-effort)
     try{
       await saveEventAndLearning('task.complete', { taskId: t._id || null, name: t.name, date: t.date, minutes });
@@ -3109,12 +3204,12 @@ async function confirmComplete(){
     console.error('confirmComplete error', err);
   }finally{
     // always try to hide modal and re-enable button
-    try{ hideCompleteModal(); }catch(e){ console.warn('hideCompleteModal failed', e); }
+    try{ hideCompleteModal({ reopen: false }); }catch(e){ console.warn('hideCompleteModal failed', e); }
     const btnC2 = document.getElementById('complete-confirm-btn'); if(btnC2) btnC2.disabled = false;
-    // defensive: if the modal element is still visible for any reason, force-hide it (inline style)
+    // defensive: ensure modal is hidden
     try{
       const modalEl = document.getElementById('complete-modal');
-      if(modalEl){ modalEl.classList.add('hidden'); modalEl.style.display = 'none'; modalEl.setAttribute('aria-hidden','true'); }
+      if(modalEl){ modalEl.classList.add('hidden'); modalEl.style.removeProperty('display'); }
     }catch(e){ console.warn('force-hide complete modal failed', e); }
     // refresh splash tasks so the completed task disappears but keep the splash open
     try{ renderSplashTasks(); }catch(e){ console.warn('renderSplashTasks after complete', e); }
@@ -3671,6 +3766,21 @@ service cloud.firestore {
 </head>
 <body>
 
+<div id="app-loading-overlay" style="
+  position:fixed; inset:0; z-index:9999;
+  background:var(--bg, #111);
+  display:flex; align-items:center; justify-content:center;
+  transition:opacity 0.3s ease;
+">
+  <div style="text-align:center; color:var(--muted, #888); font-size:14px;">
+    <div style="width:32px;height:32px;border:3px solid #333;border-top-color:#4f8ef7;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 12px"></div>
+    Carregando...
+  </div>
+</div>
+<style>
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+
 <!-- banner de configuração -->
 <div id="setup-banner">
   <span>⚠</span>
@@ -3748,7 +3858,7 @@ service cloud.firestore {
   <div class="splash-card">
     <div class="splash-header">
       <div class="logo">💬</div>
-      <h2 id="splash-greeting">Bem-vindo moreno</h2>
+      <h2 id="splash-greeting">Bem-vindo</h2>
       <button class="cal-nav splash-close" id="splash-empty-btn" aria-label="Fechar" title="Fechar">✕</button>
     </div>
     <div class="splash-tabs">
@@ -3782,11 +3892,11 @@ service cloud.firestore {
     <div class="profile-field">
       <label for="profile-gender">Saudação</label>
       <select id="profile-gender" onchange="syncProfilePreview()">
-        <option value="masc">Masculino — Bem-vindo moreno</option>
-        <option value="fem">Feminino — Bem-vinda morena</option>
+        <option value="masc">Masculino — Bem-vindo</option>
+        <option value="fem">Feminino — Bem-vinda</option>
       </select>
     </div>
-    <div id="profile-preview" class="profile-preview">Bem-vindo moreno</div>
+    <div id="profile-preview" class="profile-preview">Bem-vindo</div>
     <div id="profile-message" class="profile-message"></div>
     <div class="modal-actions">
       <button type="button" class="cal-nav" id="profile-save-btn" onclick="saveWelcomeProfile()">Salvar</button>
@@ -3796,44 +3906,45 @@ service cloud.firestore {
 
 <!-- MODAL DE EDIÇÃO DE TAREFA -->
 <div id="edit-task-modal" class="hidden">
-  <div class="modal-card">
-    <h3>Editar tarefa</h3>
+  <div class="modal-card task-form-card">
+    <h3 id="edit-task-modal-title">Editar tarefa</h3>
     <form id="edit-task-form">
-      <div class="profile-field">
+      <div class="task-form-field">
         <label for="edit-task-name">Nome</label>
-        <input id="edit-task-name" name="name" type="text" required>
+        <input id="edit-task-name" name="name" type="text" placeholder="Ex: estudar para prova" required>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-date">Data</label>
-        <input id="edit-task-date" name="date" type="date" required>
+      <div class="task-form-row">
+        <div class="task-form-field">
+          <label for="edit-task-date">Data</label>
+          <input id="edit-task-date" name="date" type="date" required>
+        </div>
+        <div class="task-form-field">
+          <label for="edit-task-time">Hora</label>
+          <input id="edit-task-time" name="time" type="time">
+        </div>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-time">Hora</label>
-        <input id="edit-task-time" name="time" type="time">
+      <div class="task-form-row">
+        <div class="task-form-field">
+          <label for="edit-task-cat">Categoria</label>
+          <select id="edit-task-cat" name="cat">
+            <option value="trabalho">Trabalho</option>
+            <option value="estudo">Estudo</option>
+            <option value="pessoal">Pessoal</option>
+            <option value="projeto">Projeto</option>
+            <option value="outro">Outro</option>
+          </select>
+        </div>
+        <div class="task-form-field">
+          <label for="edit-task-est">Duração (min)</label>
+          <input id="edit-task-est" name="est" type="number" min="1" step="5" placeholder="60">
+        </div>
       </div>
-      <div class="profile-field">
-        <label for="edit-task-cat">Categoria</label>
-        <select id="edit-task-cat" name="cat">
-          <option value="trabalho">Trabalho</option>
-          <option value="estudo">Estudo</option>
-          <option value="pessoal">Pessoal</option>
-          <option value="projeto">Projeto</option>
-          <option value="outro">Outro</option>
-        </select>
-      </div>
-      <div class="profile-field">
-        <label for="edit-task-est">Estimativa (min)</label>
-        <input id="edit-task-est" name="est" type="number" min="1" step="1">
-      </div>
-      <div class="profile-field">
-        <label>Anexos</label>
-        <div id="edit-task-attachments"></div>
-        <input id="edit-task-add-attachment" type="file" style="margin-top:8px">
-      </div>
+      <div id="edit-task-attachments" style="display:none"></div>
+      <input id="edit-task-add-attachment" type="file" style="display:none">
       <div id="edit-task-message" class="profile-message"></div>
       <div class="modal-actions">
         <button type="button" class="cal-nav" id="edit-task-cancel-btn">Cancelar</button>
-        <button type="submit" class="cal-nav">Salvar</button>
+        <button type="submit" class="cal-nav task-form-save-btn">Salvar</button>
       </div>
     </form>
   </div>
@@ -4028,6 +4139,16 @@ service cloud.firestore {
 </div>
 
 <!-- logout modal (replace native confirm) -->
+<div id="delete-confirm-modal" class="hidden">
+  <div class="modal-card">
+    <h3>Excluir tarefa</h3>
+    <div id="delete-confirm-label" style="color:var(--muted);font-size:13px;margin-top:6px">Tem certeza?</div>
+    <div class="modal-actions">
+      <button type="button" class="cal-nav" onclick="closeDeleteConfirm()">Cancelar</button>
+      <button type="button" class="cal-nav" id="delete-confirm-btn" style="border-color:rgba(245,99,66,0.4);color:#ff6b5b">Excluir</button>
+    </div>
+  </div>
+</div>
 <div id="logout-modal" class="hidden">
   <div class="modal-card">
     <h3>Tem certeza que deseja sair?</h3>
@@ -4353,38 +4474,39 @@ body {
 }
 .cal-nav:hover { border-color: var(--border2); color: var(--text); }
 
-.cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 1px; }
-  .cal-dow { font-size: 11px; color: var(--muted); text-align: center; padding: 6px 0; font-family: var(--mono); }
+.cal-grid { display: grid; grid-template-columns: repeat(7,1fr); gap: 5px; }
+  .cal-dow { font-size: 11px; color: var(--muted); text-align: center; padding: 8px 0; font-family: var(--mono); }
   .cal-day {
-    font-size: 12px; text-align: left; padding: 8px; border-radius: 10px; cursor: pointer; color: var(--muted);
-    position: relative; min-height: 86px; transition: background .15s, transform .06s; overflow: hidden;
-    background: linear-gradient(180deg, rgba(255,255,255,0.01), rgba(255,255,255,0.005)); border:1px solid rgba(255,255,255,0.02);
+    display: flex; flex-direction: column; align-items: stretch;
+    font-size: 12px; text-align: left; padding: 8px 6px 6px; border-radius: 10px; cursor: pointer; color: var(--muted);
+    position: relative; min-height: 80px; transition: background .15s, transform .06s; overflow: hidden;
+    background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.08);
   }
-  .cal-day:hover { transform: translateY(-3px); box-shadow: 0 8px 20px rgba(0,0,0,0.45); color: var(--text); }
-  .cal-day.today { background: linear-gradient(135deg, rgba(79,142,247,0.12), rgba(79,142,247,0.06)); color: var(--text); font-weight: 600; }
+  .cal-day:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.4); color: var(--text); }
+  .cal-day.today { background: linear-gradient(135deg, rgba(79,142,247,0.14), rgba(79,142,247,0.07)); color: var(--text); font-weight: 600; border-color: rgba(79,142,247,0.25); }
 .cal-day.has-task::after {
-  content: ''; position: absolute; bottom: 2px; left: 50%;
-  transform: translateX(-50%); width: 3px; height: 3px;
+  content: ''; position: absolute; bottom: 5px; left: 50%;
+  transform: translateX(-50%); width: 5px; height: 5px;
   border-radius: 50%; background: var(--green);
+  box-shadow: 0 0 4px rgba(74,222,128,0.5);
 }
-.cal-day.today.has-task::after { background: white; }
+.cal-day.today.has-task::after { background: rgba(255,255,255,0.9); box-shadow: 0 0 4px rgba(255,255,255,0.4); }
 .cal-day.other { color: var(--border2); cursor: default; }
-.cal-day.other:hover { background: none; color: var(--border2); }
+.cal-day.other:hover { background: none; transform: none; box-shadow: none; color: var(--border2); }
 
 /* mini task labels inside calendar day */
-.cal-day { display: flex; flex-direction: column; align-items: stretch; padding: 6px 4px; }
-.cal-day .day-number { font-size: 11px; margin-bottom: 4px; color: inherit; }
+.cal-day .day-number { font-size: 11px; margin-bottom: 4px; color: inherit; text-align: center; }
 .cal-day .mini-task {
-  display: flex; gap: 6px; align-items: center;
-  background: rgba(255,255,255,0.03);
-  border: 1px solid rgba(255,255,255,0.02);
-  padding: 3px 6px; border-radius: 6px; margin-bottom: 4px;
-  font-size: 11px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; gap: 4px; align-items: center;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.05);
+  padding: 2px 4px; border-radius: 4px; margin-bottom: 3px;
+  font-size: 10px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.cal-day .mini-dot { width:8px; height:8px; border-radius:3px; flex-shrink:0; }
-.cal-day .mini-text { font-size:11px; line-height:1; overflow:hidden; text-overflow:ellipsis; }
-.cal-day .mini-text.completed { text-decoration: line-through; opacity: 0.6; }
-.cal-day .more-count { font-size:10px; color:var(--muted); margin-top:2px; }
+.cal-day .mini-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+.cal-day .mini-text { font-size:10px; line-height:1.2; overflow:hidden; text-overflow:ellipsis; }
+.cal-day .mini-text.completed { text-decoration: line-through; opacity: 0.5; }
+.cal-day .more-count { font-size:9px; color:var(--muted); margin-top:1px; text-align:center; }
 
 /* ── section ── */
 .section-title {
@@ -4527,31 +4649,38 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
   #firebase-debug { display: none; }
 
   /* calendar: smaller cells */
+  .cal-grid { gap: 4px; }
   .cal-day {
-    min-height: 52px;
-    padding: 4px 2px;
-    border-radius: 6px;
+    min-height: 58px;
+    padding: 6px 4px 8px;
+    border-radius: 8px;
   }
   .cal-day .day-number {
-    font-size: 10px;
-    margin-bottom: 2px;
+    font-size: 12px;
+    font-weight: 500;
+    margin-bottom: 3px;
+    text-align: center;
   }
   /* hide mini-task labels inside calendar on small phones */
   .cal-day .mini-task {
     display: none;
   }
-  /* but keep the dot indicator */
+  /* larger, clearer dot indicator on mobile */
   .cal-day.has-task::after {
-    width: 4px;
-    height: 4px;
-    bottom: 3px;
+    width: 6px;
+    height: 6px;
+    bottom: 5px;
+    box-shadow: 0 0 5px rgba(74,222,128,0.6);
+  }
+  .cal-day.today.has-task::after {
+    box-shadow: 0 0 5px rgba(255,255,255,0.5);
   }
   .cal-day .more-count {
     display: none;
   }
   .cal-dow {
     font-size: 10px;
-    padding: 4px 0;
+    padding: 5px 0;
   }
 
   /* task cards mobile */
@@ -4618,15 +4747,6 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
   .popover-body {
     max-height: 240px;
   }
-  .popover-item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  .popover-item > div:last-child {
-    align-self: flex-end;
-  }
-
   /* profile modal */
   .profile-card {
     width: 96%;
@@ -4845,11 +4965,11 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
 /* modals overlay */
 .modal-card {
   width: min(420px, 94vw);
-  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(255,255,255,0.04));
+  background: #0f1729;
   border: 1px solid rgba(255,255,255,0.12);
-  padding: 16px;
-  border-radius: 12px;
-  box-shadow: 0 30px 80px rgba(0,0,0,0.85);
+  padding: 20px;
+  border-radius: 14px;
+  box-shadow: 0 30px 80px rgba(0,0,0,0.9);
   max-height: 90dvh;
   overflow-y: auto;
 }
@@ -4946,17 +5066,38 @@ body { -ms-overflow-style: none; scrollbar-width: none; }
 }
 #recipe-modal.hidden { display: none; }
 
-#complete-modal, #logout-modal, #edit-task-modal {
+#complete-modal, #logout-modal, #edit-task-modal, #delete-confirm-modal {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
   background: rgba(2,8,23,0.85);
-  z-index: 1300;
-  padding: 16px;
+  z-index: 1500;
+  padding: 16px 16px 120px;
 }
-#complete-modal.hidden, #edit-task-modal.hidden { display: none; }
+#complete-modal.hidden, #edit-task-modal.hidden, #delete-confirm-modal.hidden { display: none; }
 /* edit task form: inputs fill width */
 #edit-task-form .profile-field input,
 #edit-task-form .profile-field select { width: 100%; }
+
+/* task form modal */
+.task-form-card { width: min(400px, 94vw); }
+.task-form-card h3 { font-size: 17px; margin-bottom: 16px; }
+.task-form-field { display: flex; flex-direction: column; gap: 5px; }
+.task-form-field label { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-family: var(--mono); }
+.task-form-field input,
+.task-form-field select {
+  padding: 9px 12px; border-radius: 8px;
+  border: 1px solid rgba(255,255,255,0.1);
+  background: rgba(255,255,255,0.04);
+  color: var(--text); font-size: 14px; width: 100%;
+  transition: border-color .15s;
+}
+.task-form-field input:focus,
+.task-form-field select:focus { outline: none; border-color: rgba(79,142,247,0.5); background: rgba(79,142,247,0.04); }
+.task-form-field input::placeholder { color: rgba(255,255,255,0.25); }
+.task-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.task-form-field + .task-form-field { margin-top: 12px; }
+.task-form-row .task-form-field + .task-form-field { margin-top: 0; }
+.task-form-save-btn { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: white; border-color: transparent; }
 #edit-task-add-attachment { width: 100%; max-width: 100%; }
 .modal-card h3 { margin:0 0 8px 0; font-size:16px; }
 .modal-row { display:flex; gap:8px; align-items:center; margin-top:10px; }
@@ -5035,9 +5176,15 @@ input::-webkit-inner-spin-button {
 .popover-header { display:flex; align-items:center; gap:12px; justify-content:space-between; margin-bottom:8px; }
 .popover-header h3 { margin:0; font-size:20px; color: var(--text); }
 .popover-body { max-height: 320px; overflow:auto; padding:6px 0; }
-.popover-item { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px; border-radius:8px; border:1px solid rgba(255,255,255,0.02); background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); margin-bottom:8px; }
-.popover-item .left { display:flex; gap:10px; align-items:center; }
+.popover-item { display:flex; flex-direction:column; gap:8px; padding:10px; border-radius:8px; border:1px solid rgba(255,255,255,0.02); background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent); margin-bottom:8px; }
+.popover-item-done { opacity:0.6; background: transparent; border-color: rgba(255,255,255,0.01); }
+.popover-item-top { display:flex; align-items:center; gap:10px; }
+.popover-item-actions { display:flex; flex-wrap:wrap; gap:6px; }
 .popover-item .meta { font-size:12px; color:var(--muted); }
+.cal-nav.small.done-btn { border-color: rgba(74,222,128,0.4); color: var(--green); }
+.cal-nav.small.done-btn:hover { background: rgba(74,222,128,0.1); border-color: var(--green); }
+.cal-nav.small.running-btn { border-color: rgba(79,142,247,0.5); color: var(--accent); }
+.cal-nav.small.running-btn:hover { background: rgba(79,142,247,0.1); border-color: var(--accent); }
 .popover-actions { display:flex; gap:8px; justify-content:flex-end; margin-top:8px; }
 .popover-add { background: linear-gradient(135deg,var(--accent),var(--accent2)); color: white; border: none; padding:8px 12px; border-radius:8px; cursor:pointer; }
 </file>
